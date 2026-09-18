@@ -18,7 +18,7 @@ namespace WayfarerAPI
 
     class IWayfarer
     {
-    public:
+      public:
         virtual ~IWayfarer() = default;
         [[nodiscard]] virtual std::uint32_t GetVersion() const noexcept = 0;
         virtual bool RegisterFollower(std::uint32_t a_actorFormID, std::int32_t a_preferredSlot = -1) = 0;
@@ -32,12 +32,12 @@ namespace WayfarerAPI
         [[nodiscard]] virtual FormationMode GetFormationMode() const = 0;
         [[nodiscard]] virtual std::uint32_t GetManagedCount() const = 0;
     };
-}
+} // namespace WayfarerAPI
 
 #if defined(WAYFARER_EXPORTS)
-#    define WAYFARER_API __declspec(dllexport)
+#define WAYFARER_API __declspec(dllexport)
 #else
-#    define WAYFARER_API __declspec(dllimport)
+#define WAYFARER_API __declspec(dllimport)
 #endif
 
 extern "C" WAYFARER_API WayfarerAPI::IWayfarer* Wayfarer_GetInterface(std::uint32_t a_version);

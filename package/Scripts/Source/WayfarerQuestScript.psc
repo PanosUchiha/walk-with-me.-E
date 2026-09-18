@@ -3,6 +3,9 @@ Scriptname WayfarerQuestScript extends Quest
 Bool syncing = false
 Actor[] lookingActors
 Actor[] lookingTargets
+; Zero means no request, including when these variables are added to an old save.
+Int tetherPrioritySlot = 0
+Int tetherPriorityTicket = 0
 
 Event OnInit()
     Wake()
@@ -11,6 +14,57 @@ EndEvent
 Function Wake()
 
     RegisterForSingleUpdate(0.1)
+EndFunction
+
+Function RequestTetherHandoff(Int slot, Int ticket)
+    If slot >= 0 && slot < 10 && ticket != 0
+        tetherPriorityTicket = ticket
+        tetherPrioritySlot = slot + 1
+        RegisterForSingleUpdate(0.01)
+    EndIf
+EndFunction
+
+; Called ONLY by SyncAliases at slot boundaries, after all older slot work
+; has returned. Never clear an alias from the independent request stack.
+Bool Function ServiceTetherHandoff()
+    If tetherPrioritySlot == 0
+        Return true
+    EndIf
+    Int slot = tetherPrioritySlot - 1
+    Int ticket = tetherPriorityTicket
+    tetherPrioritySlot = 0
+    If StopSyncForDialogue()
+        Return false
+    EndIf
+    If ticket != Wayfarer.GetTetherHandoffTicket(slot) || Wayfarer.GetSlotFollower(slot)
+        Return true
+    EndIf
+    Int followerID = slot
+    If slot >= 5
+        followerID = slot + 5
+    EndIf
+    ReferenceAlias followerAlias = GetAlias(followerID) as ReferenceAlias
+    If !followerAlias
+        Return true
+    EndIf
+    Actor previous = followerAlias.GetActorReference()
+    If previous
+        If StopSyncForDialogue()
+            Return false
+        EndIf
+        followerAlias.Clear()
+        If StopSyncForDialogue()
+            Return false
+        EndIf
+        previous.ClearKeepOffsetFromActor()
+        If StopSyncForDialogue()
+            Return false
+        EndIf
+        previous.EvaluatePackage()
+    EndIf
+    ; Native confirmation still requires BOTH an empty alias and released package.
+    Wayfarer.ConfirmTetherHandoff(slot, ticket)
+    Return true
 EndFunction
 
 Event OnUpdate()
@@ -34,6 +88,11 @@ Function SyncAliases()
     Bool restingNow = Wayfarer.HasRestActivities()
     Int slot = 0
     While slot < 10
+        If tetherPrioritySlot != 0
+            If !ServiceTetherHandoff()
+                Return
+            EndIf
+        EndIf
         If StopSyncForDialogue()
             Return
         EndIf
@@ -69,7 +128,9 @@ Function SyncAliases()
                 seatAlias.ForceRefTo(seat)
             EndIf
         EndIf
+        Int tetherTicket = 0
         If followerAlias && markerAlias
+            tetherTicket = Wayfarer.GetTetherHandoffTicket(slot)
             Actor desired = Wayfarer.GetSlotFollower(slot)
             ObjectReference marker = Wayfarer.GetSlotMarker(slot)
             Actor previous = followerAlias.GetActorReference()
@@ -183,8 +244,18 @@ Function SyncAliases()
                 EndIf
             EndIf
         EndIf
+        ; All ClearKeepOffset/EvaluatePackage calls for this slot have returned.
+        ; A ticket captured before cleanup cannot acknowledge a newer session.
+        If tetherTicket != 0
+            Wayfarer.ConfirmTetherHandoff(slot, tetherTicket)
+        EndIf
         slot += 1
     EndWhile
+    If tetherPrioritySlot != 0
+        If !ServiceTetherHandoff()
+            Return
+        EndIf
+    EndIf
     Wayfarer.ReportAliasSync(false)
     syncing = false
 EndFunction

@@ -5,10 +5,13 @@ int main()
 {
     using namespace Wayfarer;
     using namespace Wayfarer::Hotkeys;
-    using Chord = Wayfarer::Hotkeys::Chord;  
+    using Chord = Wayfarer::Hotkeys::Chord;
     int failures = 0;
     auto check = [&](bool result, const char* message) {
-        if (!result) { ++failures; std::cerr << message << '\n'; }
+        if (!result) {
+            ++failures;
+            std::cerr << message << '\n';
+        }
     };
     constexpr std::uint32_t g = 0x22;
     std::array<bool, 256> keyboard{};
@@ -31,14 +34,16 @@ int main()
         check(held() == mask, "combined snapshot recognized without prior events");
         const Chord chord{g, mask};
         for (std::uint32_t actual = 0; actual <= allModifiers; ++actual) {
-            check(chord.Matches(g, actual) == (actual == mask), "only exact chord activates, including plain keys");
+            check(chord.Matches(g, actual) == (actual == mask),
+                  "only exact chord activates, including plain keys");
             check(!chord.Matches(g + 1, actual), "different main key does not activate");
         }
         check(CapturedChord(Capture(g, mask, true, false)) == chord, "capture preserves complete chord");
         check(Capture(g, mask, false, false) == -1 && Capture(g, mask, false, true) == -1,
-            "held and released main key cannot recapture or repeat an action");
+              "held and released main key cannot recapture or repeat an action");
         check((Capture(1, mask, true, false) & 255) == 1, "Escape cancels even with modifiers");
-        check(CapturedChord(Capture(211, mask, true, false)) == Chord{}, "Delete clears both key and modifiers");
+        check(CapturedChord(Capture(211, mask, true, false)) == Chord{},
+              "Delete clears both key and modifiers");
 
         SettingsData original;
         for (std::size_t row = 0; row < hotkeyBindings.size(); ++row) {
@@ -54,32 +59,42 @@ int main()
         SettingsData restored;
         LoadHotkeys(reread, restored);
         for (const auto& binding : hotkeyBindings) {
-            check(binding.Get(original) == binding.Get(restored), "every action retains its key and modifier after INI roundtrip");
+            check(binding.Get(original) == binding.Get(restored),
+                  "every action retains its key and modifier after INI roundtrip");
         }
-        check(reread.GetBoolValue("HandHolding", "bEnabled", false), "saving hotkeys preserves unrelated INI settings");
+        check(reread.GetBoolValue("HandHolding", "bEnabled", false),
+              "saving hotkeys preserves unrelated INI settings");
     }
     for (auto key : {0x2AU, 0x36U, 0x1DU, 0x9DU, 0x38U, 0xB8U}) {
         check(Capture(key, ModifierForKey(key), true, false) == -1, "modifier-down waits for the main key");
-        check(CapturedChord(Capture(key, 0, false, true)) == Chord{key, 0}, "standalone modifier can still be rebound on release");
-        check(Chord{key, 0}.Matches(key, ModifierForKey(key)), "existing modifier-only INI binding remains usable");
+        check(CapturedChord(Capture(key, 0, false, true)) == Chord{key, 0},
+              "standalone modifier can still be rebound on release");
+        check(Chord{key, 0}.Matches(key, ModifierForKey(key)),
+              "existing modifier-only INI binding remains usable");
     }
-    check(Capture(0x2A, ctrl, false, true) == -1, "releasing one of several modifiers does not finish capture");
+    check(Capture(0x2A, ctrl, false, true) == -1,
+          "releasing one of several modifiers does not finish capture");
     check(!Chord{}.Matches(unbound, 0), "unbound never triggers");
     check(Capture(256, 0, true, false) == -1, "non-keyboard scan code cannot corrupt packed capture");
-    check(ModifierPrefix(ctrl | shift | alt) == "Ctrl + Shift + Alt + ", "display includes each selected modifier");
+    check(ModifierPrefix(ctrl | shift | alt) == "Ctrl + Shift + Alt + ",
+          "display includes each selected modifier");
 
     SettingsData settings;
     RebindHotkey(settings, 0, {g, 0});
     RebindHotkey(settings, 1, {g, ctrl});
     RebindHotkey(settings, 2, {g, shift});
     RebindHotkey(settings, 3, {g, ctrl | shift});
-    check(hotkeyBindings[0].Get(settings) == Chord{g, 0} && hotkeyBindings[1].Get(settings) == Chord{g, ctrl} &&
-        hotkeyBindings[2].Get(settings) == Chord{g, shift}, "same base key supports independent actions");
+    check(hotkeyBindings[0].Get(settings) == Chord{g, 0} &&
+              hotkeyBindings[1].Get(settings) == Chord{g, ctrl} &&
+              hotkeyBindings[2].Get(settings) == Chord{g, shift},
+          "same base key supports independent actions");
     RebindHotkey(settings, 4, {g, ctrl});
     check(hotkeyBindings[1].Get(settings) == Chord{} && hotkeyBindings[4].Get(settings) == Chord{g, ctrl},
-        "rebinding an identical chord moves it to one action");
-    check(hotkeyBindings[0].Get(settings) == Chord{g, 0} && hotkeyBindings[2].Get(settings) == Chord{g, shift} &&
-        hotkeyBindings[3].Get(settings) == Chord{g, ctrl | shift}, "moving a chord preserves other combinations");
+          "rebinding an identical chord moves it to one action");
+    check(hotkeyBindings[0].Get(settings) == Chord{g, 0} &&
+              hotkeyBindings[2].Get(settings) == Chord{g, shift} &&
+              hotkeyBindings[3].Get(settings) == Chord{g, ctrl | shift},
+          "moving a chord preserves other combinations");
     RebindHotkey(settings, 4, {});
     check(hotkeyBindings[4].Get(settings) == Chord{}, "Clear removes modifiers too");
 
@@ -87,9 +102,13 @@ int main()
     old.LoadData("[Hotkeys]\niCommandKey=34\niScoutKey=-1\n");
     SettingsData legacy;
     LoadHotkeys(old, legacy);
-    check(legacy.commandKey == g && legacy.scoutKey == unbound && legacy.toggleKey == 0x44 && legacy.reloadKey == 0x58,
-        "old INI preserves customized keys, unbound entries and shipped defaults");
-    for (const auto& binding : hotkeyBindings) check(legacy.*binding.modifiers == 0, "old INI defaults to no modifiers");
+    check(legacy.companionKey == unbound, "New companion default does not steal an existing G binding");
+    check(legacy.commandKey == g && legacy.scoutKey == unbound && legacy.toggleKey == 0x44 &&
+              legacy.reloadKey == 0x58,
+          "old INI preserves customized keys, unbound entries and shipped defaults");
+    for (const auto& binding : hotkeyBindings) {
+        check(legacy.*binding.modifiers == 0, "old INI defaults to no modifiers");
+    }
     SaveHotkeys(old, legacy);
     check(old.GetLongValue("Hotkeys", "iScoutKey", 0) == -1, "unbound serializes as signed -1");
     for (auto invalid : {-1L, 8L, 999L}) {
@@ -100,6 +119,8 @@ int main()
     old.SetLongValue("Hotkeys", "iScoutModifiers", ctrl);
     LoadHotkeys(old, legacy);
     check(legacy.scoutModifiers == 0, "unbound INI entry cannot retain hidden modifiers");
-    std::cout << "Keyboard chords: " << failures << " failures (capture, exact matching, rebinding, keyboard snapshots and INI migration/roundtrip).\n";
+    std::cout << "Keyboard chords: " << failures
+              << " failures (capture, exact matching, rebinding, keyboard snapshots and INI "
+                 "migration/roundtrip).\n";
     return failures ? 1 : 0;
 }

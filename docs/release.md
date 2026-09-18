@@ -1,4 +1,4 @@
-# Walk With Me 0.16.7
+# Walk With Me 0.2.0
 
 ## Requirements
 
@@ -21,9 +21,13 @@ Command gestures also need First Person Interactions, Open Animation Replacer
 and generated GP Offset Movement Animation behavior. Third-person clips are
 included. FPI first-person clips are not bundled.
 
+Open Animation Replacer is also required for the authored shoulder reaction and
+optional clasp poses. Generate clasp clips locally using HAND_HOLDING.md; the
+public package ships the generator and codec source instead of game-derived clips.
+
 ## Install
 
-Close Skyrim and install `Walk-With-Me-0.16.7-SE-AE.zip` through your mod manager.
+Close Skyrim and install `Walk-With-Me-0.2.0-SE-AE.zip` through your mod manager.
 Replace the old mod, keep your INI if wanted, and enable `Wayfarer.esp`.
 Do not rename Wayfarer files or enable two copies.
 
@@ -38,5 +42,5 @@ The DLL links CommonLibSSE-NG 7.5.1 at
 The code uses GPL-3.0-or-later with the included exceptions. Asset licenses are
 separate. See LICENSE, LICENSING.md and ThirdParty.
 
-Upload `Walk-With-Me-0.16.7-Source.zip` with this download. It includes mod,
+Upload `Walk-With-Me-0.2.0-Source.zip` with this download. It includes mod,
 CommonLib and dependency source. Build instructions are in docs/build.md.

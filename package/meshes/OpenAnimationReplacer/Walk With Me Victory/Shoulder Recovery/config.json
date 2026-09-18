@@ -1,0 +1,12 @@
+{
+    "name": "Shoulder Recovery",
+    "description": "Two loose shoulder circles after combat, only for the sheathed companion selected by WWM. 6.5 seconds.",
+    "priority": 27102000,
+    "conditions": [
+        {
+            "condition": "WWM_PostCombatShoulderRecovery",
+            "requiredVersion": "0.2.0.0",
+            "requiredPlugin": "Walk With Me"
+        }
+    ]
+}

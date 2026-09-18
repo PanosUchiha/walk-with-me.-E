@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Wayfarer VERSION 0.16.7 LANGUAGES CXX)
+project(Wayfarer VERSION 0.2.0 LANGUAGES CXX)
 if(PROJECT_VERSION_PATCH STREQUAL "")
     set(PROJECT_VERSION_PATCH 0)
 endif()
@@ -31,6 +31,10 @@ set(WAYFARER_SOURCES
     src/formation_controller.cpp
     src/dialogue_management.cpp
     src/victory_celebration.cpp
+    src/victory_animation.cpp
+    src/tether_clasp.cpp
+    third_party/OpenAnimationReplacer/OpenAnimationReplacerAPI-Conditions.cpp
+    third_party/OpenAnimationReplacer/OpenAnimationReplacer-ConditionTypes.cpp
     src/formation_math.cpp
     src/travel_planner.cpp
     src/role_assignment.cpp
@@ -43,7 +47,8 @@ set(WAYFARER_SOURCES
     src/order_visuals.cpp
     src/command_gesture.cpp
     src/gesture_head_tracking.cpp
-    src/hand_holding.cpp
+    src/hand_holding_tether.cpp
+    src/havok_compatibility.cpp
     src/input_handler.cpp
     src/papyrus_bridge.cpp
     src/config.cpp
@@ -58,7 +63,7 @@ if(WAYFARER_COMMONLIB_SOURCE)
 endif()
 target_include_directories(Wayfarer
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
-    PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated ${SIMPLEINI_INCLUDE_DIRS}
+    PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated ${SIMPLEINI_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenAnimationReplacer
 )
 target_link_libraries(Wayfarer PRIVATE CommonLibSSE::CommonLibSSE)
 target_precompile_headers(Wayfarer PRIVATE include/precompiled.h)
@@ -75,6 +80,14 @@ set_target_properties(Wayfarer PROPERTIES
 )
 
 enable_testing()
+add_executable(WayfarerTetherTests tests/tether_handoff_tests.cpp src/travel_planner.cpp src/formation_math.cpp)
+target_compile_features(WayfarerTetherTests PRIVATE cxx_std_20)
+target_include_directories(WayfarerTetherTests PRIVATE include)
+add_test(NAME WayfarerTether COMMAND WayfarerTetherTests)
+add_executable(WayfarerPackageControlTests tests/package_control_tests.cpp)
+target_compile_features(WayfarerPackageControlTests PRIVATE cxx_std_20)
+target_include_directories(WayfarerPackageControlTests PRIVATE include)
+add_test(NAME WayfarerPackageControl COMMAND WayfarerPackageControlTests)
 add_executable(WayfarerFollowerDialogueTests tests/follower_dialogue_tests.cpp)
 target_compile_features(WayfarerFollowerDialogueTests PRIVATE cxx_std_20)
 target_include_directories(WayfarerFollowerDialogueTests PRIVATE include)

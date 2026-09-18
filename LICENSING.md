@@ -12,8 +12,17 @@ Earlier grants remain valid. Original command animations keep that MIT license.
 Third-party files keep their own licenses:
 
 - SKSE Menu Framework API: LGPL-2.1.
+- Open Animation Replacer conditions SDK: GPL-3.0 with the upstream modding
+  and linking exceptions; see `third_party/OpenAnimationReplacer` and the
+  corresponding `package/ThirdParty/OpenAnimationReplacer-*` notices.
+- Bundled PyNifly animation codec: GPL-3.0, with its upstream source and license.
+  Generated clasp clips are made locally from the player's own game and are excluded
+  from public binary and source downloads.
 - Cinzel Decorative: OFL-1.1.
 - Credited Game-icons.net artwork: CC-BY-3.0.
+- TETHER travel-speed hook reference and physics adaptation: MIT,
+  Copyright (c) 2026 KEI997. Full license and adaptation details are in
+  `package/ThirdParty/TETHER-LICENSE.txt` and `TETHER-NOTICE.txt`.
 
 See `package/ThirdParty` in the source or `ThirdParty` in the mod ZIP.
 These notices do not license Skyrim's game files.

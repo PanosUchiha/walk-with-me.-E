@@ -18,7 +18,7 @@ namespace
             std::exit(1);
         }
     }
-}
+} // namespace
 
 int main()
 {
@@ -31,13 +31,15 @@ int main()
     Require(Near(east.x, 1.0F) && Near(east.y, 0.0F), "quarter-turn yaw faces positive X");
 
     const auto fallback = Normalize({});
-    Require(Near(fallback.x, 0.0F) && Near(fallback.y, 1.0F), "zero velocity has a finite normalized fallback");
-    const auto forward = Normalize({ 13.0F, -7.0F });
+    Require(Near(fallback.x, 0.0F) && Near(fallback.y, 1.0F),
+            "zero velocity has a finite normalized fallback");
+    const auto forward = Normalize({13.0F, -7.0F});
     const auto right = RightFromForward(forward);
     Require(Near(forward.x * right.x + forward.y * right.y, 0.0F), "travel axes stay orthogonal");
 
-    const auto smoothed = SmoothDirection({ 0.0F, 1.0F }, { 1.0F, 0.0F }, 0.1F, 5.0F);
-    Require(smoothed.x > 0.0F && smoothed.x < 1.0F && smoothed.y > 0.0F, "direction smoothing avoids instant turns");
+    const auto smoothed = SmoothDirection({0.0F, 1.0F}, {1.0F, 0.0F}, 0.1F, 5.0F);
+    Require(smoothed.x > 0.0F && smoothed.x < 1.0F && smoothed.y > 0.0F,
+            "direction smoothing avoids instant turns");
 
     std::cout << "Wayfarer formation math tests passed.\n";
     return 0;

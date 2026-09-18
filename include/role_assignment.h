@@ -14,4 +14,4 @@ namespace Wayfarer
     std::vector<int> PairNearbyRoles(std::span<const Vec2> actors, std::span<const Vec2> goals,
                                      std::span<const int> roles, std::span<const std::array<int, 2>> pairs,
                                      Vec2 forward);
-}  
+} // namespace Wayfarer

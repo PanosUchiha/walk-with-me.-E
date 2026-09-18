@@ -42,7 +42,7 @@ the source versions used. Different compilers or SDKs may change the DLL bytes.
 
 ## Package
 
-`tools/build-esl.ps1` writes the ESP and SEQ. Compile the four scripts in
+`tools/build-esl.ps1` writes the ESP and SEQ. Compile all six scripts in
 `package/Scripts/Source` using the Papyrus compiler, vanilla/SKSE imports and
 TESV_Papyrus_Flags.flg. Obtain those game/SDK tools separately.
 
@@ -56,4 +56,24 @@ python -X utf8 tools/package-release.py --vcpkg-root C:/vcpkg
 ```
 
 Keep vcpkg's `buildtrees/*/src/*.clean` folders for source packaging.
-Upload both ZIPs and their checksums. Test the result in game.
+The public packager includes the local clasp generator and its GPL-licensed
+PyNifly codec source. It rejects game-derived clasp clips and checks every
+bundled original animation against `assets/release-animation-hashes.json`.
+See hand-holding.md to generate the optional clips from a user's own game files;
+keep that generated ZIP separate from public downloads.
+
+Upload both public ZIPs and their checksums. Test the result in game.
+
+## Source style
+
+Use the existing `.clang-format` (clang-format 19) for first-party C++:
+
+```powershell
+.\tools\format-source.ps1 -ClangFormat 'C:\path\to\clang-format.exe'
+.\tools\format-source.ps1 -ClangFormat 'C:\path\to\clang-format.exe' -Check
+```
+
+Keep direct functions, plain state structs, explicit ownership and early exits,
+as in the 0.16.7 baseline. Do not introduce a framework for a single operation.
+Third-party API/codec sources retain their upstream style. The default public
+packager is `tools/package-release.py`; older prototype packagers are historical.

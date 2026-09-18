@@ -31,7 +31,7 @@ Copy-Item (Join-Path $build "bin\Release\Wayfarer.dll") (Join-Path $package "SKS
 Push-Location (Join-Path $package "Scripts\Source")
 try {
     $imports = $PapyrusImports + ';' + (Join-Path $package "Scripts\Source")
-    foreach ($script in @('Wayfarer.psc', 'WayfarerQuestScript.psc', 'WayfarerDialogueAdd.psc', 'WayfarerDialogueRemove.psc')) {
+    foreach ($script in @('Wayfarer.psc', 'WayfarerQuestScript.psc', 'WayfarerDialogueAdd.psc', 'WayfarerDialogueRemove.psc', 'WayfarerTether.psc', 'WayfarerRecovery.psc')) {
         & $PapyrusCompiler $script ('-i=' + $imports) ('-f=' + $PapyrusFlags) ('-o=' + (Join-Path $package 'Scripts'))
         if ($LASTEXITCODE -ne 0) { throw "Papyrus compilation failed: $script" }
     }
@@ -52,5 +52,6 @@ foreach ($document in @('api-guide.md', 'nexus.md', "changes-$version.md", 'test
 
 
 & (Join-Path $PSScriptRoot 'tools/build-compatibility.ps1') -Vcpkg (Join-Path $VcpkgRoot 'vcpkg.exe') -CMake $CMake
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/modern/bin/Release/Wayfarer.dll') -Destination (Join-Path $package 'SKSE/Plugins/Wayfarer.dll') -Force
 & $Python -X utf8 (Join-Path $PSScriptRoot 'tools/package-release.py') --vcpkg-root $VcpkgRoot
 if ($LASTEXITCODE -ne 0) { throw 'Unified release packaging failed.' }

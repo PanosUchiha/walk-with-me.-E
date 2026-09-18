@@ -29,11 +29,16 @@ Try Lead, Companion and Rear in third and first person. Test headtracking with
 and without TDM. Interrupt with weapons, dialogue, camera changes and save/load.
 
 Enable hand holding for one follower. Check standing, walking, running, turning
-and release. Check that other followers keep normal movement. Wrist twisting is
-still a known issue; record video instead of treating a passed unit test as visual proof.
+and release on each side. Check that other followers keep normal movement.
+Revision 18 retains native close approach, remembers script handoff completion
+and adds authored clasp animations. Follow tether-r18-handoff.md, especially
+timing, wrist orientation, interrupted acquisition and following recovery.
+Record video; unit tests do not establish visual quality.
 
-Defeat four enemies: no celebration. Defeat five in one fight: eligible followers
-may briefly clap or cheer. Leaving one alive, renewed combat, a new order or loading
+Defeat two enemies: no celebration. Defeat three in one fight: eligible followers
+may applaud with empty hands or cheer with a drawn sword/greatsword. Test both
+weapon types, sheathing during the reaction, and a spell/bow waiting for sheathe.
+Leaving one alive, renewed combat, a new order or loading
 must cancel it. Check that borrowed AI and animation state is restored.
 
 ## Reports

@@ -161,12 +161,17 @@ assert b'SetDialogueManagement' in (root/'Scripts/Wayfarer.pex').read_bytes()
 import configparser
 settings=configparser.ConfigParser(inline_comment_prefixes=(';',))
 settings.read(root/'SKSE/Plugins/Wayfarer.ini',encoding='utf-8-sig')
-assert settings.getboolean('General','bAutoDiscover'), 'shipped defaults must add recruited followers'
-assert settings.getint('General','iEnrollmentVersion') == 1, 'enrollment migration marker missing'
+assert not settings.getboolean('General','bAutoDiscover'), 'shipped defaults must require explicit follower enrollment'
+assert settings.getint('General','iEnrollmentVersion') == 2, 'manual enrollment migration marker missing'
+if '--installed-settings' in sys.argv:
+    assert 0 <= settings.getint('Hotkeys','iCompanionKey') <= 511, 'invalid installed shortcut scan code'
+else:
+    assert settings.getint('Hotkeys','iCompanionKey') == 34, 'target companion shortcut must default to G'
+assert (root/'Interface/WalkWithMe/teleport.svg').is_file(), 'game teleport artwork missing'
 
 import xml.etree.ElementTree as ET
 art=root/'Interface/WalkWithMe'
-expected={'natural','arrow','wing-a','wing-b','shield','logs','flame','ember','wheel-slice'}
+expected={'natural','arrow','wing-a','wing-b','shield','logs','flame','ember','wheel-slice','teleport'}
 assert {p.stem for p in art.glob('*.svg')}==expected
 assert not list(art.glob('*.png')), 'obsolete generated raster artwork must not ship'
 for name in expected:
@@ -184,5 +189,14 @@ for name in ['Wayfarer', 'WayfarerQuestScript']:
     assert pex[:4] == b'\xfa\x57\xc0\xde', 'expected Skyrim big-endian PEX'
     assert b'ReportAliasSync' in pex, 'victory reactions require the matching compiled alias-sync bridge'
 assert (root / 'SKSE/Plugins/Wayfarer.dll').read_bytes()[:2] == b'MZ'
+recovery = (root / 'Scripts/WayfarerRecovery.pex').read_bytes()
+assert recovery[:4] == b'\xfa\x57\xc0\xde' and all(name in recovery for name in (b'ConsumePush', b'PushActorAway')), 'matching unstick bridge missing'
+assert (root / 'Scripts/Source/WayfarerRecovery.psc').is_file()
+tether = (root / 'Scripts/WayfarerTether.pex').read_bytes()
+assert tether[:4] == b'\xfa\x57\xc0\xde' and b'AddHavokBallAndSocketConstraint' in tether, 'matching tether bridge missing'
+assert b'RequestTetherHandoff' in (root / 'Scripts/WayfarerQuestScript.pex').read_bytes()
+if '--public' in sys.argv:
+    assert not (root / 'meshes/OpenAnimationReplacer/WWM Clasp').exists(), 'generate clasp clips locally, never publish them'
+    assert len(list((root / 'Scripts').glob('*.pex'))) == 6, 'expected six matching compiled scripts'
 assert not list(root.rglob('*.bak')), 'backup files must stay out of the package'
-print('Package verified: preserved packages/aliases/globals, two gated dialogue branches and fragments, SEQ, four Skyrim PEX files, artwork and DLL.')
+print('Package verified: preserved packages/aliases/globals, dialogue and fragments, SEQ, Skyrim PEX files including unstick bridge, artwork and DLL.')

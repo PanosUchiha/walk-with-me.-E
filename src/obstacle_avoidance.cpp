@@ -15,7 +15,7 @@ namespace Wayfarer
         {
             return std::hypot(a.x - b.x, a.y - b.y);
         }
-    }  
+    } // namespace
     bool UseLocalObstacleSteering(bool wilderness, bool handGuided, bool distantCatchup, float playerDistance)
     {
 
@@ -104,7 +104,7 @@ namespace Wayfarer
         for (float degrees : {35.0F, 60.0F, 85.0F}) {
             for (int sign : {side, -side}) {
                 if (legs && sign != side) {
-                    continue;  
+                    continue;
                 }
                 const float angle = degrees * .01745329252F;
                 const Vec2 direction{forward.x * std::cos(angle) + right.x * sign * std::sin(angle),
@@ -143,4 +143,4 @@ namespace Wayfarer
         age = clearTime = 0;
         return {ObstacleRoute::Detour, waypoint, true};
     }
-}  
+} // namespace Wayfarer

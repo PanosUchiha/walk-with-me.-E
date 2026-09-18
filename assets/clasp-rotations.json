@@ -1,0 +1,488 @@
+{
+  "R": {
+    "bones": [
+      "NPC Root [Root]",
+      "x_NPC LookNode [Look]",
+      "x_NPC Translate [Pos ]",
+      "x_NPC Rotate [Rot ]",
+      "NPC COM [COM ]",
+      "NPC Pelvis [Pelv]",
+      "NPC L Thigh [LThg]",
+      "NPC L Calf [LClf]",
+      "NPC L Foot [Lft ]",
+      "NPC R Thigh [RThg]",
+      "NPC R Calf [RClf]",
+      "NPC R Foot [Rft ]",
+      "SkirtRBone01",
+      "SkirtRBone02",
+      "SkirtRBone03",
+      "SkirtLBone01",
+      "SkirtLBone02",
+      "SkirtLBone03",
+      "SkirtBBone01",
+      "SkirtBBone02",
+      "SkirtBBone03",
+      "SkirtFBone01",
+      "SkirtFBone02",
+      "SkirtFBone03",
+      "NPC Spine [Spn0]",
+      "NPC Spine1 [Spn1]",
+      "NPC Spine2 [Spn2]",
+      "NPC L Clavicle [LClv]",
+      "NPC L UpperArm [LUar]",
+      "NPC L Forearm [LLar]",
+      "NPC R Clavicle [RClv]",
+      "NPC R UpperArm [RUar]",
+      "NPC R Forearm [RLar]",
+      "AnimObjectA",
+      "AnimObjectB",
+      "NPC Neck [Neck]",
+      "NPC Head [Head]",
+      "NPCEyeBone",
+      "NPC L Hand [LHnd]",
+      "NPC R Hand [RHnd]",
+      "AnimObjectL",
+      "AnimObjectR",
+      "Shield",
+      "Weapon",
+      "NPC L Pauldron",
+      "NPC R Pauldron",
+      "MagicEffectsNode",
+      "NPC L MagicNode [LMag]",
+      "NPC R MagicNode [RMag]",
+      "NPC Head MagicNode [Hmag]",
+      "NPC L Toe0 [LToe]",
+      "NPC R Toe0 [RToe]",
+      "NPC L ForearmTwist1 [LLt1]",
+      "NPC L ForearmTwist2 [LLt2]",
+      "NPC L UpperarmTwist1 [LUt1]",
+      "NPC L UpperarmTwist2 [LUt2]",
+      "NPC R ForearmTwist1 [RLt1]",
+      "NPC R ForearmTwist2 [RLt2]",
+      "NPC R UpperarmTwist1 [RUt1]",
+      "NPC R UpperarmTwist2 [RUt2]",
+      "Quiver",
+      "WeaponAxe",
+      "WeaponBack",
+      "WeaponBow",
+      "WeaponDagger",
+      "WeaponMace",
+      "WeaponSword",
+      "NPC L Finger00 [LF00]",
+      "NPC L Finger01 [LF01]",
+      "NPC L Finger02 [LF02]",
+      "NPC L Finger10 [LF10]",
+      "NPC L Finger11 [LF11]",
+      "NPC L Finger12 [LF12]",
+      "NPC L Finger20 [LF20]",
+      "NPC L Finger21 [LF21]",
+      "NPC L Finger22 [LF22]",
+      "NPC L Finger30 [LF30]",
+      "NPC L Finger31 [LF31]",
+      "NPC L Finger32 [LF32]",
+      "NPC L Finger40 [LF40]",
+      "NPC L Finger41 [LF41]",
+      "NPC L Finger42 [LF42]",
+      "NPC R Finger00 [RF00]",
+      "NPC R Finger01 [RF01]",
+      "NPC R Finger02 [RF02]",
+      "NPC R Finger10 [RF10]",
+      "NPC R Finger11 [RF11]",
+      "NPC R Finger12 [RF12]",
+      "NPC R Finger20 [RF20]",
+      "NPC R Finger21 [RF21]",
+      "NPC R Finger22 [RF22]",
+      "NPC R Finger30 [RF30]",
+      "NPC R Finger31 [RF31]",
+      "NPC R Finger32 [RF32]",
+      "NPC R Finger40 [RF40]",
+      "NPC R Finger41 [RF41]",
+      "NPC R Finger42 [RF42]",
+      "Camera3rd [Cam3]",
+      "Camera Control"
+    ],
+    "rotations": {
+      "NPC R UpperArm [RUar]": [
+        -0.18962478637695312,
+        0.45910122990608215,
+        -0.006901760585606098,
+        0.8678829669952393
+      ],
+      "NPC R Forearm [RLar]": [
+        -0.3040069043636322,
+        0.23342393338680267,
+        0.4700623154640198,
+        0.7950688600540161
+      ],
+      "NPC R Hand [RHnd]": [
+        -0.07602881640195847,
+        -0.294594943523407,
+        0.7169860005378723,
+        0.6271877884864807
+      ],
+      "NPC R ForearmTwist1 [RLt1]": [
+        -0.037404052913188934,
+        -0.7061738967895508,
+        -0.03740185126662254,
+        0.7060598134994507
+      ],
+      "NPC R ForearmTwist2 [RLt2]": [
+        -0.20737488567829132,
+        -0.6760984063148499,
+        -0.20733430981636047,
+        0.67594313621521
+      ],
+      "NPC R Finger00 [RF00]": [
+        0.04491576552391052,
+        0.25785261392593384,
+        -0.5598729252815247,
+        0.786153256893158
+      ],
+      "NPC R Finger01 [RF01]": [
+        0.19109947979450226,
+        -0.18481288850307465,
+        -0.0031278529204428196,
+        0.9640100598335266
+      ],
+      "NPC R Finger02 [RF02]": [
+        0.04352492839097977,
+        -0.0245259627699852,
+        0.0010363078908994794,
+        0.9987506866455078
+      ],
+      "NPC R Finger10 [RF10]": [
+        0.2761822044849396,
+        0.02092071808874607,
+        0.05605000630021095,
+        0.9592414498329163
+      ],
+      "NPC R Finger11 [RF11]": [
+        0.24430227279663086,
+        0.018058400601148605,
+        -0.00528930826112628,
+        0.9695165753364563
+      ],
+      "NPC R Finger12 [RF12]": [
+        0.17689254879951477,
+        0.007000812329351902,
+        -0.004261738620698452,
+        0.9841960668563843
+      ],
+      "NPC R Finger20 [RF20]": [
+        0.3084706664085388,
+        -0.004247759468853474,
+        0.09075294435024261,
+        0.9468852877616882
+      ],
+      "NPC R Finger21 [RF21]": [
+        0.29223743081092834,
+        0.009918109513819218,
+        -0.011206741444766521,
+        0.9562287330627441
+      ],
+      "NPC R Finger22 [RF22]": [
+        0.2104276716709137,
+        0.0027103694155812263,
+        -0.005913148634135723,
+        0.9775877594947815
+      ],
+      "NPC R Finger30 [RF30]": [
+        0.3472323417663574,
+        -0.04751386120915413,
+        0.16425752639770508,
+        0.9220583438873291
+      ],
+      "NPC R Finger31 [RF31]": [
+        0.32548174262046814,
+        -0.01962423510849476,
+        -0.015141558833420277,
+        0.9452233910560608
+      ],
+      "NPC R Finger32 [RF32]": [
+        0.18738871812820435,
+        -0.010853942483663559,
+        -0.004390200134366751,
+        0.9822160601615906
+      ],
+      "NPC R Finger40 [RF40]": [
+        0.3231907784938812,
+        -0.08238939195871353,
+        0.203955739736557,
+        0.9204139709472656
+      ],
+      "NPC R Finger41 [RF41]": [
+        0.3321404457092285,
+        -0.039970964193344116,
+        -0.02113032527267933,
+        0.9421457052230835
+      ],
+      "NPC R Finger42 [RF42]": [
+        0.30855533480644226,
+        -0.02257024496793747,
+        -0.0025033531710505486,
+        0.9509353041648865
+      ]
+    }
+  },
+  "L": {
+    "bones": [
+      "NPC Root [Root]",
+      "x_NPC LookNode [Look]",
+      "x_NPC Translate [Pos ]",
+      "x_NPC Rotate [Rot ]",
+      "NPC COM [COM ]",
+      "NPC Pelvis [Pelv]",
+      "NPC L Thigh [LThg]",
+      "NPC L Calf [LClf]",
+      "NPC L Foot [Lft ]",
+      "NPC R Thigh [RThg]",
+      "NPC R Calf [RClf]",
+      "NPC R Foot [Rft ]",
+      "SkirtRBone01",
+      "SkirtRBone02",
+      "SkirtRBone03",
+      "SkirtLBone01",
+      "SkirtLBone02",
+      "SkirtLBone03",
+      "SkirtBBone01",
+      "SkirtBBone02",
+      "SkirtBBone03",
+      "SkirtFBone01",
+      "SkirtFBone02",
+      "SkirtFBone03",
+      "NPC Spine [Spn0]",
+      "NPC Spine1 [Spn1]",
+      "NPC Spine2 [Spn2]",
+      "NPC L Clavicle [LClv]",
+      "NPC L UpperArm [LUar]",
+      "NPC L Forearm [LLar]",
+      "NPC R Clavicle [RClv]",
+      "NPC R UpperArm [RUar]",
+      "NPC R Forearm [RLar]",
+      "AnimObjectA",
+      "AnimObjectB",
+      "NPC Neck [Neck]",
+      "NPC Head [Head]",
+      "NPCEyeBone",
+      "NPC L Hand [LHnd]",
+      "NPC R Hand [RHnd]",
+      "AnimObjectL",
+      "AnimObjectR",
+      "Shield",
+      "Weapon",
+      "NPC L Pauldron",
+      "NPC R Pauldron",
+      "MagicEffectsNode",
+      "NPC L MagicNode [LMag]",
+      "NPC R MagicNode [RMag]",
+      "NPC Head MagicNode [Hmag]",
+      "NPC L Toe0 [LToe]",
+      "NPC R Toe0 [RToe]",
+      "NPC L ForearmTwist1 [LLt1]",
+      "NPC L ForearmTwist2 [LLt2]",
+      "NPC L UpperarmTwist1 [LUt1]",
+      "NPC L UpperarmTwist2 [LUt2]",
+      "NPC R ForearmTwist1 [RLt1]",
+      "NPC R ForearmTwist2 [RLt2]",
+      "NPC R UpperarmTwist1 [RUt1]",
+      "NPC R UpperarmTwist2 [RUt2]",
+      "Quiver",
+      "WeaponAxe",
+      "WeaponBack",
+      "WeaponBow",
+      "WeaponDagger",
+      "WeaponMace",
+      "WeaponSword",
+      "NPC L Finger00 [LF00]",
+      "NPC L Finger01 [LF01]",
+      "NPC L Finger02 [LF02]",
+      "NPC L Finger10 [LF10]",
+      "NPC L Finger11 [LF11]",
+      "NPC L Finger12 [LF12]",
+      "NPC L Finger20 [LF20]",
+      "NPC L Finger21 [LF21]",
+      "NPC L Finger22 [LF22]",
+      "NPC L Finger30 [LF30]",
+      "NPC L Finger31 [LF31]",
+      "NPC L Finger32 [LF32]",
+      "NPC L Finger40 [LF40]",
+      "NPC L Finger41 [LF41]",
+      "NPC L Finger42 [LF42]",
+      "NPC R Finger00 [RF00]",
+      "NPC R Finger01 [RF01]",
+      "NPC R Finger02 [RF02]",
+      "NPC R Finger10 [RF10]",
+      "NPC R Finger11 [RF11]",
+      "NPC R Finger12 [RF12]",
+      "NPC R Finger20 [RF20]",
+      "NPC R Finger21 [RF21]",
+      "NPC R Finger22 [RF22]",
+      "NPC R Finger30 [RF30]",
+      "NPC R Finger31 [RF31]",
+      "NPC R Finger32 [RF32]",
+      "NPC R Finger40 [RF40]",
+      "NPC R Finger41 [RF41]",
+      "NPC R Finger42 [RF42]",
+      "Camera3rd [Cam3]",
+      "Camera Control"
+    ],
+    "rotations": {
+      "NPC L UpperArm [LUar]": [
+        -0.28374454379081726,
+        -0.46620362997055054,
+        -0.026524126529693604,
+        0.8375200033187866
+      ],
+      "NPC L Forearm [LLar]": [
+        -0.22553661465644836,
+        0.17701563239097595,
+        0.6605004668235779,
+        0.6939293146133423
+      ],
+      "NPC L Hand [LHnd]": [
+        0.052078891545534134,
+        -0.22915874421596527,
+        -0.5578418374061584,
+        0.7959815263748169
+      ],
+      "NPC L ForearmTwist1 [LLt1]": [
+        -0.7070319652557373,
+        -0.0050042662769556046,
+        -0.707146167755127,
+        0.005001402925699949
+      ],
+      "NPC L ForearmTwist2 [LLt2]": [
+        0.6731472611427307,
+        -0.21652232110500336,
+        0.673134982585907,
+        0.21651765704154968
+      ],
+      "NPC L Finger00 [LF00]": [
+        0.044915806502103806,
+        -0.2578524053096771,
+        0.5598726272583008,
+        0.7861535549163818
+      ],
+      "NPC L Finger01 [LF01]": [
+        0.19109949469566345,
+        0.18481303751468658,
+        0.003127559321001172,
+        0.9640100002288818
+      ],
+      "NPC L Finger02 [LF02]": [
+        0.043524932116270065,
+        0.0245259627699852,
+        -0.0010363024193793535,
+        0.9987507462501526
+      ],
+      "NPC L Finger10 [LF10]": [
+        0.27618226408958435,
+        -0.02092069946229458,
+        -0.056049928069114685,
+        0.9592413902282715
+      ],
+      "NPC L Finger11 [LF11]": [
+        0.24430221319198608,
+        -0.018058255314826965,
+        0.005289499182254076,
+        0.9695165753364563
+      ],
+      "NPC L Finger12 [LF12]": [
+        0.17689260840415955,
+        -0.007000760640949011,
+        0.004261848051100969,
+        0.9841960072517395
+      ],
+      "NPC L Finger20 [LF20]": [
+        0.3084706962108612,
+        0.004247717559337616,
+        -0.09075280278921127,
+        0.9468852281570435
+      ],
+      "NPC L Finger21 [LF21]": [
+        0.29223760962486267,
+        -0.009917954914271832,
+        0.011206991970539093,
+        0.9562286734580994
+      ],
+      "NPC L Finger22 [LF22]": [
+        0.21042770147323608,
+        -0.0027102953754365444,
+        0.0059132962487638,
+        0.9775878190994263
+      ],
+      "NPC L Finger30 [LF30]": [
+        0.3472324013710022,
+        0.04751388356089592,
+        -0.16425736248493195,
+        0.9220584034919739
+      ],
+      "NPC L Finger31 [LF31]": [
+        0.32548174262046814,
+        0.019624415785074234,
+        0.01514185406267643,
+        0.9452233910560608
+      ],
+      "NPC L Finger32 [LF32]": [
+        0.1873885840177536,
+        0.010854000225663185,
+        0.004390368703752756,
+        0.9822161197662354
+      ],
+      "NPC L Finger40 [LF40]": [
+        0.323190838098526,
+        0.0823894590139389,
+        -0.20395560562610626,
+        0.9204139113426208
+      ],
+      "NPC L Finger41 [LF41]": [
+        0.3321402966976166,
+        0.039971183985471725,
+        0.021130606532096863,
+        0.9421457648277283
+      ],
+      "NPC L Finger42 [LF42]": [
+        0.30855536460876465,
+        0.02257039211690426,
+        0.002503434894606471,
+        0.9509353041648865
+      ]
+    }
+  },
+  "clips": [
+    "female/mt_idle.hkx",
+    "female/mt_runbackward.hkx",
+    "female/mt_runbackwardleft.hkx",
+    "female/mt_runbackwardright.hkx",
+    "female/mt_runforward.hkx",
+    "female/mt_runforwardleft.hkx",
+    "female/mt_runforwardright.hkx",
+    "female/mt_runleft.hkx",
+    "female/mt_runright.hkx",
+    "female/mt_walkbackward.hkx",
+    "female/mt_walkbackwardleft.hkx",
+    "female/mt_walkbackwardright.hkx",
+    "female/mt_walkforward.hkx",
+    "female/mt_walkforwardleft.hkx",
+    "female/mt_walkforwardright.hkx",
+    "female/mt_walkleft.hkx",
+    "female/mt_walkright.hkx",
+    "male/mt_idle.hkx",
+    "male/mt_runbackward.hkx",
+    "male/mt_runbackwardleft.hkx",
+    "male/mt_runbackwardright.hkx",
+    "male/mt_runforward.hkx",
+    "male/mt_runforwardleft.hkx",
+    "male/mt_runforwardright.hkx",
+    "male/mt_runleft.hkx",
+    "male/mt_runright.hkx",
+    "male/mt_walkbackward.hkx",
+    "male/mt_walkbackwardleft.hkx",
+    "male/mt_walkbackwardright.hkx",
+    "male/mt_walkforward.hkx",
+    "male/mt_walkforwardleft.hkx",
+    "male/mt_walkforwardright.hkx",
+    "male/mt_walkleft.hkx",
+    "male/mt_walkright.hkx"
+  ]
+}

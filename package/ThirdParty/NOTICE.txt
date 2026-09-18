@@ -5,6 +5,19 @@ API source: https://github.com/QTR-Modding/SKSE-Menu-Framework-3-API
 The vendored header is available in Walk With Me's include/SKSEMenuFramework.h.
 The framework DLL is not redistributed by Walk With Me.
 
+Walk With Me uses Ersh's Open Animation Replacer conditions SDK to scope the
+post-combat shoulder animation to a selected companion. Source revision:
+f4e7688b065175aff70aa523073857911e15aca3 from
+https://github.com/ersh1/OpenAnimationReplacer
+The vendored API and its local metadata adaptation are in
+third_party/OpenAnimationReplacer in the matching source archive.
+See OpenAnimationReplacer-COPYING.txt and OpenAnimationReplacer-EXCEPTIONS.txt.
+OpenAnimationReplacer.dll remains a separately installed dependency.
+
+The shoulder recovery under meshes/OpenAnimationReplacer/Walk With Me Victory
+is an original Walk With Me animation authored from the user's reference video.
+It uses the same preserved MIT animation license as the command gestures.
+
 The seven command-gesture HKX files under meshes/OpenAnimationReplacer/Walk With Me
 Signals are original Walk With Me animations authored for this release. They are
 covered by the preserved MIT license in WalkWithMe-MIT-LICENSE.txt. No Gesture Animation Remix or
@@ -15,3 +28,13 @@ The current DLL links alandtse/CommonLibSSE-NG 7.5.1, revision
 bedcb1e05418baba7b316a650b6180c2dd6007a8, under GPL-3.0-or-later.
 See the root LICENSE and CommonLib-EXCEPTIONS.md. Distribute the matching
 source archive alongside the mod download. Third-party notices remain in force.
+
+The travel-speed hook and experimental physics handholding adapt TETHER by KEI997.
+The current build combines that grip with WWM approach, handoff and authored poses.
+Copyright (c) 2026 KEI997. Used under MIT; see TETHER-LICENSE.txt and
+TETHER-NOTICE.txt. Source: https://github.com/Kei-BWV997/TETHER
+
+The optional ClaspGenerator includes unmodified PyNifly codec source under GPL-3.0,
+revision bcb723aba2ca4a80e976d957efbde69b33f2e56f. See ClaspGenerator/LICENSE and
+ClaspGenerator/NOTICE.md. Source: https://github.com/BadDogSkyrim/PyNifly
+Generated Skyrim-derived clasp clips are not included in the public archives.

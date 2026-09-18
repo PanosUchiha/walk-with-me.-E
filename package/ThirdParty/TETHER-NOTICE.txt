@@ -1,0 +1,47 @@
+TETHER — Hand-Holding for Followers
+Author: KEI997 (GitHub: Kei-BWV997)
+Copyright (c) 2026 KEI997
+License: MIT; the upstream license is reproduced in TETHER-LICENSE.txt.
+Source: https://github.com/Kei-BWV997/TETHER
+Reviewed revision: 19e04c23a3dac77c5345b8101d6a94df9895d35f (v1.0.2)
+
+Current build: revision 18 integrates offset movement and the physics grip
+after a native WWM close approach and ticketed handoff. Ordinary formation
+movement retains the following rollback baseline and subsequent cell fix.
+Revision 12 remains a withdrawn historical experiment.
+
+Walk With Me adapts the physics hand connection sequence from TetherController.cpp
+and distance-based movement speed interpolation from GetSpeedMultiplierFor.
+Its existing travel speed hook also references TETHER's SpeedHook.cpp call site.
+Adapted files: src/hand_holding_tether.cpp, include/tether_session.h,
+src/travel_speed.cpp, package/Scripts/Source/WayfarerTether.psc.
+
+Walk With Me modifications: checked sequential physics operations, cancellation
+and rollback, current-skeleton validation, either-side grip, existing companion
+selection and eligibility, ordinary WWM travel followed by KeepOffsetFromActor,
+ticketed alias cleanup, settled contact, failed-attempt rearming, one shared
+speed hook, dialogue grace and bounded acquisition. Revision 16 adds temporary
+package arrival tolerances and bounded pre-physics facing after handoff.
+Revision 17 uses upstream's fixed 5-unit local-Z palm pivots, prioritizes serialized
+alias cleanup and removes a duplicate settling delay. No handholding speed
+multipliers are used. The
+distance-based speed helper remains as source provenance, unused at runtime.
+
+Revision 18 remembers completed script cleanup while the engine changes package,
+adds WWM-authored arm/wrist/finger rotations through OAR, and uses palm-surface
+pivots (0,-2.35,5). The local test clips retain containers extracted from this
+user's installed Skyrim. They are not TETHER assets or covered by its MIT license;
+the public 0.2.0 downloads contain the generator and authored rotations instead.
+Players generate those clips locally from their own game files.
+
+Upstream credits asdsad121 for enabling living-actor constraints by first adding
+the ragdoll bodies to the physics world, and TESFAN for the movement-speed hook
+pattern. These references are acknowledged as technical provenance; their source
+files were not copied into this adaptation.
+
+No TETHER HKX assets or NetImmerseUtils.h are incorporated. The OAR SDK is
+sourced separately from Ersh and carries its own notices.
+The GitHub repository contains no HKX animation files. Its release placeholders
+have separate Gulan0 provenance and are not included or relicensed here.
+The standalone TETHER plugin is not required. This adaptation is maintained by
+Walk With Me; it does not imply KEI997's endorsement or support.

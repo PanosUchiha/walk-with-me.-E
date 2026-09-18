@@ -1,9 +1,23 @@
 #pragma once
-#include "RE/Skyrim.h"
 #include "RE/M/MenuTopicManager.h"
+#include "RE/Skyrim.h"
 
 namespace Wayfarer::Engine
 {
+    inline std::int32_t FactionRank(RE::Actor& actor, RE::TESFaction* faction)
+    {
+        if (!faction) {
+            return -1;
+        }
+#ifdef WAYFARER_MODERN_COMMONLIB
+        return actor.GetFactionRank(faction, false);
+#else
+        using Function = std::int32_t (*)(RE::Actor*, RE::TESFaction*, bool);
+        static REL::Relocation<Function> function{REL::RelocationID(36668, 37676)};
+        return function(&actor, faction, false);
+#endif
+    }
+
     inline bool IsKeyPressed(const RE::BSWin32KeyboardDevice& keyboard, std::uint32_t key)
     {
 
@@ -16,8 +30,7 @@ namespace Wayfarer::Engine
         return key < sizeof(state) && (state[key] & 0x80) != 0;
     }
 
-    template<class Callback>
-    void ForEachHighActor(RE::ProcessLists& lists, Callback callback)
+    template <class Callback> void ForEachHighActor(RE::ProcessLists& lists, Callback callback)
     {
 #ifdef WAYFARER_MODERN_COMMONLIB
         lists.ForEachHighActor([&](RE::Actor* actor) {
@@ -28,8 +41,9 @@ namespace Wayfarer::Engine
 #endif
     }
 
-    template<class Callback>
-    void ForEachReferenceInRange(RE::TESObjectCELL& cell, const RE::NiPoint3& center, float radius, Callback callback)
+    template <class Callback>
+    void ForEachReferenceInRange(RE::TESObjectCELL& cell, const RE::NiPoint3& center, float radius,
+                                 Callback callback)
     {
 #ifdef WAYFARER_MODERN_COMMONLIB
         cell.ForEachReferenceInRange(center, radius, [&](RE::TESObjectREFR* reference) {
@@ -66,4 +80,4 @@ namespace Wayfarer::Engine
         RE::DebugNotification(text);
 #endif
     }
-}
+} // namespace Wayfarer::Engine

@@ -1,7 +1,7 @@
 #include "input_handler.h"
 
-#include "formation_controller.h"
 #include "config.h"
+#include "formation_controller.h"
 
 namespace Wayfarer
 {
@@ -23,18 +23,19 @@ namespace Wayfarer
         }
     }
 
-    RE::BSEventNotifyControl InputHandler::ProcessEvent(
-        RE::InputEvent* const* a_event,
-        RE::BSTEventSource<RE::InputEvent*>*)
+    RE::BSEventNotifyControl InputHandler::ProcessEvent(RE::InputEvent* const* a_event,
+                                                        RE::BSTEventSource<RE::InputEvent*>*)
     {
         if (!a_event) {
             return RE::BSEventNotifyControl::kContinue;
         }
 
-        if (Menu::IsInstalled()) { return RE::BSEventNotifyControl::kContinue; }
+        if (Menu::IsInstalled()) {
+            return RE::BSEventNotifyControl::kContinue;
+        }
         for (auto* event = *a_event; event; event = event->next) {
             (void)Menu::HandleInput(event);
         }
         return RE::BSEventNotifyControl::kContinue;
     }
-}
+} // namespace Wayfarer

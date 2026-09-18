@@ -1,4 +1,5 @@
 #include "Plugin.h"
+#include "WayfarerAPI.h"
 #include "command_gesture.h"
 #include "formation_controller.h"
 #include "hand_holding.h"
@@ -7,8 +8,9 @@
 #include "menu_ui.h"
 #include "papyrus_bridge.h"
 #include "runtime_compatibility.h"
+#include "tether_clasp.h"
 #include "travel_speed.h"
-#include "WayfarerAPI.h"
+#include "victory_animation.h"
 
 namespace
 {
@@ -84,6 +86,10 @@ namespace
     void OnMessage(SKSE::MessagingInterface::Message* a_message)
     {
         switch (a_message->type) {
+        case SKSE::MessagingInterface::kPostLoad:
+            Wayfarer::Victory::Animation::Register();
+            Wayfarer::HandHolding::Clasp::Register();
+            break;
         case SKSE::MessagingInterface::kInputLoaded:
             Wayfarer::InputHandler::Register();
             break;
@@ -97,10 +103,12 @@ namespace
             break;
         case SKSE::MessagingInterface::kPreLoadGame:
             Wayfarer::FormationController::GetSingleton().ResetForGameLoad();
+            Wayfarer::HandHolding::OnGameLoaded();
             Wayfarer::Menu::Reset();
             break;
         case SKSE::MessagingInterface::kPostLoadGame:
         case SKSE::MessagingInterface::kNewGame:
+            Wayfarer::HandHolding::OnGameLoaded();
             Wayfarer::FormationController::GetSingleton().ResetForGameLoad();
             Wayfarer::Menu::Reset();
             break;
@@ -108,7 +116,7 @@ namespace
             break;
         }
     }
-}  
+} // namespace
 
 extern "C" WAYFARER_API WayfarerAPI::IWayfarer* Wayfarer_GetInterface(std::uint32_t a_version)
 {
@@ -158,13 +166,16 @@ extern "C" [[maybe_unused]] __declspec(dllexport) constinit auto SKSEPlugin_Vers
     version.PluginName("Walk With Me");
     version.PluginVersion(Plugin::VERSION);
     version.AuthorName("Codex and Tobih");
+    // "No struct use" was never true here: the plugin reads actor runtime data,
+    // AIProcess, character controller flags and animation graph state. Declaring
+    // it told the script extender to skip the very check that matters, and left
+    // the post-629 layout claim unmade. Declare what is actually compiled in.
 #ifdef WAYFARER_MODERN_COMMONLIB
     version.UsesAddressLibrary();
-
-    version.UsesNoStructs();
+    version.UsesUpdatedStructs();
 #else
     version.UsesAddressLibrary(true);
-    version.HasNoStructUse(true);
+    version.UsesStructsPost629(true);
 #endif
     return version;
 }();

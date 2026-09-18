@@ -150,4 +150,4 @@ namespace Wayfarer
         }
         return result;
     }
-}  
+} // namespace Wayfarer

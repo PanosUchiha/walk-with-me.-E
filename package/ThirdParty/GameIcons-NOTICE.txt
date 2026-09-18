@@ -3,6 +3,7 @@ Walk With Me interface icons are adapted from Game-icons.net:
 Footsteps by Skoll: https://game-icons.net/1x1/skoll/footsteps.html
 Winged arrow by Lorc: https://game-icons.net/1x1/lorc/winged-arrow.html
 Campfire by Lorc: https://game-icons.net/1x1/lorc/campfire.html
+Teleport by Lorc: https://game-icons.net/1x1/lorc/teleport.html
 Viking shield by Delapouite: https://game-icons.net/1x1/delapouite/viking-shield.html
 
 Licensed under Creative Commons Attribution 3.0 Unported (CC BY 3.0).

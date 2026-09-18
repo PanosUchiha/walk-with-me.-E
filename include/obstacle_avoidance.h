@@ -38,4 +38,4 @@ namespace Wayfarer
         ObstaclePlan Plan(GroundPoint origin, GroundPoint goal, float speed, float dt, float arrivalRadius,
                           const ObstacleProbe& probe);
     };
-}  
+} // namespace Wayfarer
