@@ -217,6 +217,9 @@ namespace Wayfarer
             float delay{}, elapsed{};
             float duration{Victory::reactionSeconds};
             bool started{};
+            bool armedPhaseDone{};
+            bool shoulderSelected{}, clipChecked{};
+            unsigned startAttempts{};
             std::uint32_t variation{};
             float nextAttempt{};
             std::uint64_t queuedAtAliasSync{};

@@ -18,6 +18,35 @@ GroundTriangle Triangle(float x, float y, float z)
 }
 int main()
 {
+    {
+        std::unordered_map<GroundKey, GroundTriangle> cave{
+            {1, Triangle(0, 0, 0)},     {2, Triangle(0, 80, 0)},  {3, Triangle(100, 120, 0)},
+            {4, Triangle(170, 200, 0)}, {5, Triangle(0, 300, 0)}, {6, Triangle(0, -200, 0)}};
+        cave[1].neighbors = {2, 6, {}};
+        cave[2].neighbors = {1, 3, {}};
+        cave[3].neighbors = {2, 4, {}};
+        cave[4].neighbors[0] = 3;
+        cave[6].neighbors[0] = 1;
+        GroundQuery passage = [&](GroundKey key) -> std::optional<GroundTriangle> {
+            auto found = cave.find(key);
+            return found == cave.end() ? std::nullopt : std::optional{found->second};
+        };
+        auto connected = ExploreRestGround({0, 0, 0}, 1, {{0, 0, 0}, 500, 192, 900, 128}, passage);
+        auto ahead = ConnectedFormationDestinations({0, 0, 0}, {0, 300}, {0, 1}, connected, passage);
+        Check(!ahead.empty() && ahead.front().x > 0 && ahead.front().y >= 110,
+              "Lead finds a connected destination around an L-shaped mine passage");
+        for (auto p : ahead) {
+            Check(p.y >= 110 && p.x != 0,
+                  "Lead excludes rear routes and the closer but disconnected room beyond a wall");
+        }
+        auto rear = ConnectedFormationDestinations({0, 0, 0}, {0, -300}, {0, -1}, connected, passage);
+        Check(!rear.empty() && rear.front().y == -200,
+              "Natural rear slots and Rear mode retain a destination behind the player");
+        cave[2].neighbors[1].reset();
+        connected = ExploreRestGround({0, 0, 0}, 1, {{0, 0, 0}, 500, 192, 900, 128}, passage);
+        Check(ConnectedFormationDestinations({0, 0, 0}, {0, 300}, {0, 1}, connected, passage).empty(),
+              "Lead cannot invent a connection across missing navmesh");
+    }
 
     std::unordered_map<GroundKey, GroundTriangle> mesh{{1, Triangle(0, 0, 0)},
                                                        {2, Triangle(250, 0, 0)},

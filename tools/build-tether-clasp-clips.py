@@ -189,7 +189,7 @@ def main():
             print(f'Validated {side}: {source.relative_to(vanilla)}', flush=True)
     (out / 'encoded.hkx').unlink()
     (out / 'validation.json').write_text(json.dumps(report, indent=2) + '\n')
-    (out / 'README.txt').write_text('Walk With Me 0.2.0 - locally generated hand-clasp clips.\n'
+    (out / 'README.txt').write_text('Walk With Me 0.2.1 - locally generated hand-clasp clips.\n'
                                    'Install after the main mod. Restart Skyrim. Keep this generated mod local.\n')
     with zipfile.ZipFile(archive, 'x', zipfile.ZIP_DEFLATED) as output:
         for path in sorted(out.rglob('*')):

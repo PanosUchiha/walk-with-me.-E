@@ -28,110 +28,159 @@ namespace Wayfarer
         };
     } // namespace
 
-    ObstaclePlan TravelNavigation::AvoidObstacles(RE::Actor& actor, RE::NiPoint3 goal, float speed, float dt,
-                                                  float arrivalRadius, ObstacleAvoidance& state) const
+    std::optional<GroundPoint> TravelNavigation::ProbeCorridor(RE::Actor& anchor, GroundPoint origin,
+                                                               Vec2 destination,
+                                                               ObstaclePlan& diagnostics) const
     {
-        auto* cell = actor.GetParentCell();
+        auto* cell = anchor.GetParentCell();
         auto* world = cell ? cell->GetbhkWorld() : nullptr;
         const float scale = RE::bhkWorld::GetWorldScale();
-        if (!world || !std::isfinite(scale) || scale <= 0) {
-            state.Reset();
-            ObstaclePlan failed;
-            failed.queryFailed = true;
-            return failed;
+        if (!world || !std::isfinite(scale) || scale <= 0 ||
+            std::hypot(destination.x - origin.x, destination.y - origin.y) > 1200) {
+            diagnostics.queryFailed = true;
+            return {};
         }
-        const auto pos = actor.GetPosition();
-        unsigned rays = 0, navRejects = 0;
-        RE::FormID blocker = 0;
-        bool queryFailed = false;
-        const auto probe = [&](GroundPoint origin, Vec2 destination) -> std::optional<GroundPoint> {
-            const RE::NiPoint3 startPoint{origin.x, origin.y, origin.z};
-            auto ground = Trace(startPoint, destination);
-            if (!ground || std::hypot(ground->x - destination.x, ground->y - destination.y) > 2) {
+        auto& rays = diagnostics.rays;
+        auto& navRejects = diagnostics.navRejects;
+        auto& blocker = diagnostics.blocker;
+        auto& queryFailed = diagnostics.queryFailed;
+        const RE::NiPoint3 startPoint{origin.x, origin.y, origin.z};
+        auto ground = Trace(startPoint, destination);
+        if (!ground || std::hypot(ground->x - destination.x, ground->y - destination.y) > 2) {
+            ++navRejects;
+            return {};
+        }
+        const auto forward = Normalize({destination.x - origin.x, destination.y - origin.y});
+        const auto right = RightFromForward(forward);
+
+        const float distance = std::hypot(destination.x - origin.x, destination.y - origin.y);
+        const int segments = std::clamp(static_cast<int>(std::ceil(distance / 75.0F)), 1, 16);
+        auto from = startPoint;
+        for (int segment = 1; segment <= segments; ++segment) {
+            const float fraction = static_cast<float>(segment) / segments;
+            const Vec2 xy{origin.x + (destination.x - origin.x) * fraction,
+                          origin.y + (destination.y - origin.y) * fraction};
+            auto to = segment == segments ? ground : Trace(startPoint, xy);
+            if (!to || std::hypot(to->x - xy.x, to->y - xy.y) > 2) {
                 ++navRejects;
                 return {};
             }
-            const auto forward = Normalize({destination.x - origin.x, destination.y - origin.y});
-            const auto right = RightFromForward(forward);
 
-            for (float side : {-28.0F, 28.0F}) {
-                const Vec2 edge{destination.x + right.x * side, destination.y + right.y * side};
-                auto support = Trace(startPoint, edge);
-                if (!support || std::hypot(support->x - edge.x, support->y - edge.y) > 2 ||
-                    std::abs(support->z - ground->z) > 32) {
-                    ++navRejects;
-                    return {};
-                }
-            }
-            const float distance = std::hypot(destination.x - origin.x, destination.y - origin.y);
-            const int segments = std::clamp(static_cast<int>(std::ceil(distance / 150.0F)), 1, 4);
-            auto from = startPoint;
-            for (int segment = 1; segment <= segments; ++segment) {
-                const float fraction = static_cast<float>(segment) / segments;
-                const Vec2 xy{origin.x + (destination.x - origin.x) * fraction,
-                              origin.y + (destination.y - origin.y) * fraction};
-                auto to = segment == segments ? ground : Trace(startPoint, xy);
-                if (!to || std::hypot(to->x - xy.x, to->y - xy.y) > 2) {
-                    ++navRejects;
-                    return {};
-                }
+            // The route center must stay on connected navmesh. Requiring both
+            // shoulders on that mesh adds another 28 units of inset and rejects
+            // narrow paths even when their physical walls clear the actor.
+            // Keep the full-width, three-height collision sweep below.
 
-                {
-                    RE::BSReadLockGuard guard(world->worldLock);
-                    for (float height : {40.0F, 92.0F}) {
-                        for (float side : {-28.0F, 0.0F, 28.0F}) {
-                            const RE::NiPoint3 offset{right.x * side, right.y * side, height};
-                            const auto a = (from + offset) * scale, b = (*to + offset) * scale;
-                            RE::bhkPickData pick{};
-                            TravelObstacleCollector collector;
-                            collector.Reset();
-                            pick.rayInput.from = RE::hkVector4{a.x, a.y, a.z, 0};
-                            pick.rayInput.to = RE::hkVector4{b.x, b.y, b.z, 0};
+            {
+                RE::BSReadLockGuard guard(world->worldLock);
+                for (float height : {32.0F, 80.0F, 128.0F}) {
+                    for (float side : {-28.0F, 0.0F, 28.0F}) {
+                        if (rays >= 144) {
+                            queryFailed = true;
+                            return {};
+                        }
+                        const RE::NiPoint3 offset{right.x * side, right.y * side, height};
+                        const auto a = (from + offset) * scale, b = (*to + offset) * scale;
+                        RE::bhkPickData pick{};
+                        TravelObstacleCollector collector;
+                        collector.Reset();
+                        pick.rayInput.from = RE::hkVector4{a.x, a.y, a.z, 0};
+                        pick.rayInput.to = RE::hkVector4{b.x, b.y, b.z, 0};
 #ifdef WAYFARER_MODERN_COMMONLIB
-                            pick.rayInput.filterInfo.filter =
-                                static_cast<std::uint32_t>(RE::COL_LAYER::kCharController) | (1u << 16);
-                            pick.closestRayHitCollector = &collector;
+                        pick.rayInput.filterInfo.filter =
+                            static_cast<std::uint32_t>(RE::COL_LAYER::kCharController) | (1u << 16);
+                        pick.closestRayHitCollector = &collector;
 #else
-                            pick.rayInput.filterInfo =
-                                static_cast<std::uint32_t>(RE::COL_LAYER::kCharController) | (1u << 16);
-                            pick.rayHitCollectorA8 = &collector;
+                        pick.rayInput.filterInfo =
+                            static_cast<std::uint32_t>(RE::COL_LAYER::kCharController) | (1u << 16);
+                        pick.rayHitCollectorA8 = &collector;
 #endif
-                            world->PickObject(pick);
-                            ++rays;
+                        world->PickObject(pick);
+                        ++rays;
 #ifdef WAYFARER_MODERN_COMMONLIB
-                            if (pick.pickFailed) {
-                                queryFailed = true;
-                                return {};
-                            }
+                        if (pick.pickFailed) {
+                            queryFailed = true;
+                            return {};
+                        }
 #else
-                            if (pick.unkC0) {
-                                queryFailed = true;
-                                return {};
-                            }
+                        if (pick.unkC0) {
+                            queryFailed = true;
+                            return {};
+                        }
 #endif
-                            if (!std::isfinite(collector.rayHit.hitFraction)) {
-                                queryFailed = true;
-                                return {};
+                        if (!std::isfinite(collector.rayHit.hitFraction)) {
+                            queryFailed = true;
+                            return {};
+                        }
+                        if (collector.HasHit() && collector.rayHit.hitFraction < 1.0F) {
+                            if (!blocker) {
+                                blocker = collector.closestReference;
                             }
-                            if (collector.HasHit() && collector.rayHit.hitFraction < 1.0F) {
-                                if (!blocker)
-                                    blocker = collector.closestReference;
-                                return {};
-                            }
+                            return {};
                         }
                     }
                 }
-                from = *to;
             }
-            return GroundPoint{ground->x, ground->y, ground->z};
+            from = *to;
+        }
+        return GroundPoint{ground->x, ground->y, ground->z};
+    }
+
+    ObstaclePlan TravelNavigation::AvoidObstacles(RE::Actor& actor, RE::NiPoint3 goal, float speed, float dt,
+                                                  float arrivalRadius, ObstacleAvoidance& state) const
+    {
+        ObstaclePlan diagnostics;
+        const auto pos = actor.GetPosition();
+        const auto probe = [&](GroundPoint origin, Vec2 destination) {
+            return ProbeCorridor(actor, origin, destination, diagnostics);
         };
         auto result =
             state.Plan({pos.x, pos.y, pos.z}, {goal.x, goal.y, goal.z}, speed, dt, arrivalRadius, probe);
-        result.blocker = blocker;
-        result.rays = rays;
-        result.navRejects = navRejects;
-        result.queryFailed = queryFailed;
+        result.blocker = diagnostics.blocker;
+        result.rays = diagnostics.rays;
+        result.navRejects = diagnostics.navRejects;
+        result.queryFailed = diagnostics.queryFailed;
         return result;
+    }
+
+    std::optional<RE::NiPoint3> TravelNavigation::ResolveClear(RE::Actor& anchor, Vec2 goal, Vec2 direction,
+                                                               ObstaclePlan& diagnostics) const
+    {
+        const auto pos = anchor.GetPosition();
+        const auto result = FitFormationCorridor(
+            {pos.x, pos.y, pos.z}, goal, direction, [&](GroundPoint origin, Vec2 destination) {
+                return ProbeCorridor(anchor, origin, destination, diagnostics);
+            });
+        return result ? std::optional<RE::NiPoint3>{{result->x, result->y, result->z}} : std::nullopt;
+    }
+
+    std::optional<RE::NiPoint3> TravelNavigation::ResolveConnected(RE::Actor& anchor, Vec2 goal,
+                                                                   Vec2 direction) const
+    {
+        const auto pos = anchor.GetPosition();
+        const auto source = Find(pos);
+        if (!source) {
+            return {};
+        }
+        const GroundPoint origin{pos.x, pos.y, pos.z};
+        const auto key = (static_cast<GroundKey>(source->mesh->GetFormID()) << 16) | source->triangle;
+        const GroundQuery query = [&](GroundKey at) { return RestTriangle(at); };
+        const auto area = ExploreRestGround(origin, key, {origin, 500, 192, 900, 128}, query);
+        ObstaclePlan diagnostics;
+        const auto forward = Normalize(direction);
+        for (const auto& point : ConnectedFormationDestinations(origin, goal, direction, area, query)) {
+            // Validate body clearance at the destination; a direct player-to-
+            // destination ray would reject the very bend this search handles.
+            const GroundPoint from{point.x - forward.x * 28, point.y - forward.y * 28, point.z};
+            const Vec2 to{point.x + forward.x * 28, point.y + forward.y * 28};
+            if (ProbeCorridor(anchor, from, to, diagnostics)) {
+                return RE::NiPoint3{point.x, point.y, point.z};
+            }
+            if (diagnostics.queryFailed) {
+                break;
+            }
+        }
+        return {};
     }
 
     void TravelNavigation::Collect(RE::PlayerCharacter& a_player)

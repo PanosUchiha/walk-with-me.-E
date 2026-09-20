@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Wayfarer VERSION 0.2.0 LANGUAGES CXX)
+project(Wayfarer VERSION 0.2.1 LANGUAGES CXX)
 if(PROJECT_VERSION_PATCH STREQUAL "")
     set(PROJECT_VERSION_PATCH 0)
 endif()
@@ -164,7 +164,7 @@ target_compile_features(WayfarerBehaviorTests PRIVATE cxx_std_20)
 target_include_directories(WayfarerBehaviorTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME WayfarerBehavior COMMAND WayfarerBehaviorTests)
 
-add_executable(WayfarerRestNavigationTests tests/rest_navigation_tests.cpp)
+add_executable(WayfarerRestNavigationTests tests/rest_navigation_tests.cpp src/formation_math.cpp)
 target_compile_features(WayfarerRestNavigationTests PRIVATE cxx_std_20)
 target_include_directories(WayfarerRestNavigationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME WayfarerRestNavigation COMMAND WayfarerRestNavigationTests)

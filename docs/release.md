@@ -1,4 +1,9 @@
-# Walk With Me 0.2.0
+# Walk With Me 0.2.1
+
+This release preserves the user-approved r9 build: September 19 r3 movement,
+later post-combat reactions and a separate gestures add-on. The r5–r8 movement
+experiments are removed. See `docs/baseline-0.2.1.md` for the accepted baseline
+and remaining limitations.
 
 ## Requirements
 
@@ -18,8 +23,10 @@ builds, plus the x64 Visual C++ runtime. GOG 1.6.1179 needs SKSE 2.2.6 GOG.
 NFF and other frameworks are optional.
 
 Command gestures also need First Person Interactions, Open Animation Replacer
-and generated GP Offset Movement Animation behavior. Third-person clips are
-included. FPI first-person clips are not bundled.
+and generated GP Offset Movement Animation behavior. Install the matching
+`Command-Gestures.zip` add-on for the third-person clips and behavior source patch.
+The base archive has neither the GPMA patch nor FPI-dependent signal configs.
+FPI first-person clips are not bundled.
 
 Open Animation Replacer is also required for the authored shoulder reaction and
 optional clasp poses. Generate clasp clips locally using HAND_HOLDING.md; the
@@ -27,8 +34,11 @@ public package ships the generator and codec source instead of game-derived clip
 
 ## Install
 
-Close Skyrim and install `Walk-With-Me-0.2.0-SE-AE.zip` through your mod manager.
+Close Skyrim and install `Walk-With-Me-0.2.1-SE-AE.zip` through your mod manager.
 Replace the old mod, keep your INI if wanted, and enable `Wayfarer.esp`.
+Do not merge over the old combined download: remove its leftover WWM gesture
+files by replacing the installation. Follow GESTURES.md to install the optional
+add-on and regenerate behaviors, or to remove the old gesture patch.
 Do not rename Wayfarer files or enable two copies.
 
 Read USAGE.md for controls, HAND_HOLDING.md for the experimental feature and
@@ -42,5 +52,5 @@ The DLL links CommonLibSSE-NG 7.5.1 at
 The code uses GPL-3.0-or-later with the included exceptions. Asset licenses are
 separate. See LICENSE, LICENSING.md and ThirdParty.
 
-Upload `Walk-With-Me-0.2.0-Source.zip` with this download. It includes mod,
+Upload `Walk-With-Me-0.2.1-Source.zip` with this download. It includes mod,
 CommonLib and dependency source. Build instructions are in docs/build.md.

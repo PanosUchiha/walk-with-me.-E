@@ -93,6 +93,18 @@ int main()
     }
     Check(filtered.Direction().x > .9F, "deliberate ninety-degree turn is followed promptly");
     TravelIntent gradual;
+    TravelIntent corner;
+    Move(corner, {0, 100}, 3, t);
+    const float straightLead = corner.RoutingLead();
+    const auto straightGoal = corner.GoalAt(FormationMode::kLead, {0, 0}, false, 1, t);
+    corner.Update({0, 295}, {100, 0}, .15F, t);
+    Check(corner.RoutingLead() < straightLead * .3F,
+          "a sharp corner retracts the old-heading route extension during turn recognition");
+    Check(corner.GoalAt(FormationMode::kLead, {0, 0}, false, 1, t).y < straightGoal.y - 40,
+          "prediction retracts before the smoothed formation heading cuts across the corner");
+    Move(corner, {100, 0}, 3, t);
+    Check(corner.Direction().x > .99F && corner.RoutingLead() > straightLead * .98F,
+          "straight travel after the corner restores useful prediction");
     Move(gradual, {0, 100}, 2, t);
     Vec2 curved{0, 195};
     for (int frame = 0; frame < 180; ++frame) {
@@ -217,6 +229,31 @@ int main()
     retry.Tick({}, .15F, false, t);
     Check(retry.ShouldRepath({}, 100, true, false, t), "unaccepted handoff retries after its grace period");
     const std::array<GroundPoint, 3> slope{{{0, 0, 0}, {100, 0, 100}, {0, 100, 0}}};
+    TravelGoalState blocked;
+    blocked.Commit({0, 567}, {}, TravelPace::kRun);
+    blocked.MarkRepathed();
+    int blockedRetries = 0;
+    for (int i = 0; i < 40 && blocked.active; ++i) {
+        blocked.Tick({}, .15F, true, t);
+        if (blocked.ShouldRepath({}, 0, false, true, t)) {
+            Check(blocked.sinceRepath >= 1.0F, "stationary retries leave time for the engine to route");
+            blocked.MarkRepathed();
+            ++blockedRetries;
+        }
+    }
+    Check(blockedRetries >= 2 && blockedRetries <= 4,
+          "an unchanged cave destination gets bounded retries before recovery");
+    Check(!blocked.active && blocked.recoveryTime > 0,
+          "retries cannot suppress recovery for a truly blocked path");
+    TravelGoalState progressing;
+    progressing.Commit({0, 567}, {}, TravelPace::kRun);
+    progressing.MarkRepathed();
+    for (int i = 1; i <= 20; ++i) {
+        const Vec2 position{0, float(i) * 10};
+        progressing.Tick(position, .15F, true, t);
+        Check(!progressing.ShouldRepath(position, 0, false, true, t),
+              "progress toward a static goal preserves the current route");
+    }
     const auto weights = GroundWeights({25, 25, 0}, slope);
     Check(weights && std::abs((*weights)[1] * 100 - 25) < .01F, "ground height follows slopes");
     const auto outside = GroundWeights({100, 100, 0}, slope);

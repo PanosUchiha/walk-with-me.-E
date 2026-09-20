@@ -43,5 +43,9 @@ must cancel it. Check that borrowed AI and animation state is restored.
 
 ## Reports
 
+For the pending-reaction and confined-path test build, follow
+[reactions-pathing-review.md](reactions-pathing-review.md), including both
+directions through Lost Prospect Mine in Natural, Lead, Companion and Rear.
+
 Include game version, follower/framework mods, location, reproduction steps and
 `Walk With Me.log`. For startup failures, include `skse64.log` too.

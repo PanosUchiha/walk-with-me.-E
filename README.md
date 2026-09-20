@@ -3,13 +3,18 @@
 Skyrim follower mod. Travel with up to 10 companions, change their formation,
 and let them rest nearby.
 
-Version **0.2.0** includes targeted companion controls, Unstick, party teleport,
-temporary relaxation, updated victory reactions and experimental TETHER-based
-hand holding. See the [changelog](docs/changes-0.2.0.md) and
+Version **0.2.1** preserves the user-approved r3 movement baseline with updated
+post-combat reactions, separate command gestures, companion controls and
+experimental TETHER-based hand holding. See the [changelog](docs/changes-0.2.1.md) and
 [companion controls](docs/package-control.md).
+
+For future feature work, start from the [accepted baseline](docs/baseline-0.2.1.md).
 
 The public package includes a local generator for optional hand-clasp animations.
 It contains no Skyrim-derived clasp clips. See [hand holding](docs/hand-holding.md).
+Command signals and their GPMA extension now ship in the separate Command Gestures
+add-on. Install its requirements and regenerate behaviors as described in
+[gesture setup](docs/gestures.md). Replace old combined installs rather than merging.
 
 ## Setup
 
@@ -30,7 +35,7 @@ NFF and other frameworks are optional. See [release details](docs/release.md).
 - [Build](docs/build.md)
 - [API](docs/api-guide.md)
 - [Tests](docs/testing.md)
-- [Changes](docs/changes-0.2.0.md)
+- [Changes](docs/changes-0.2.1.md)
 - [Publish source](docs/publish.md)
 
 ## License

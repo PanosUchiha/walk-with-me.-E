@@ -62,7 +62,14 @@ bundled original animation against `assets/release-animation-hashes.json`.
 See hand-holding.md to generate the optional clips from a user's own game files;
 keep that generated ZIP separate from public downloads.
 
-Upload both public ZIPs and their checksums. Test the result in game.
+The public packager writes the base SE/AE ZIP, optional Command Gestures ZIP and
+matching complete Source ZIP, each with a checksum. The source archive preserves
+the combined staging tree so all assets can be rebuilt. The base install excludes
+GPMA source patches and FPI-dependent signal configs. Upload all three ZIPs and
+their checksums. Test generation and playback before publishing.
+
+Run the animation packaging regressions before packaging:
+`python -m unittest discover -s tests -p test_animation_package.py -v`.
 
 ## Source style
 

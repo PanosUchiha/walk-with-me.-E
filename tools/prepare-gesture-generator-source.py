@@ -5,6 +5,7 @@ GPMA patch discovers these files through MO2; no extra checkbox is required.
 """
 from pathlib import Path
 import importlib.util,xml.etree.ElementTree as ET,json,hashlib
+from animation_package import nemesis_text, verify_patch
 root=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('overlay',root/'tools/patch-command-overlay.py')
 overlay=importlib.util.module_from_spec(spec);spec.loader.exec_module(overlay)
@@ -17,8 +18,8 @@ assert len(mask)==99 and mask[:24]==[0]*24
 def load(i):return ET.fromstring((source/f'#gpma${i}.txt').read_text())
 def setp(obj,name,value):obj.find(f"hkparam[@name='{name}']").text=str(value)
 def write(obj,i):
-    obj.set('name',f'#gpma${i}');ET.indent(obj,space='\t')
-    path=out/f'#gpma${i}.txt';path.write_text(ET.tostring(obj,encoding='unicode')+'\n')
+    obj.set('name',f'#gpma${i}')
+    path=out/f'#gpma${i}.txt';path.write_text(nemesis_text(obj))
     return path
 files=[]
 for index,values in [(37,[1-x for x in mask]),(38,mask)]:
@@ -35,6 +36,7 @@ for path in files:
     obj=ET.parse(path).getroot()
     for p in obj.findall('hkparam'):
         if 'numelements' in p.attrib and not list(p):assert len((p.text or '').split())==int(p.get('numelements'))
+verify_patch(out)
 report={str(p.relative_to(root/'package')):hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
 audit=root/'build/gesture-generator-fix';audit.mkdir(exist_ok=True)
 (audit/'generator-source.json').write_text(json.dumps(report,indent=2)+'\n')

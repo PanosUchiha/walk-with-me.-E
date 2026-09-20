@@ -23,6 +23,10 @@ namespace Wayfarer
     };
 
     using ObstacleProbe = std::function<std::optional<GroundPoint>(GroundPoint, Vec2)>;
+    // Try formation width first, then shorten the centerline in confined spaces.
+    // Probes must validate the complete route and return the requested endpoint.
+    std::optional<GroundPoint> FitFormationCorridor(GroundPoint origin, Vec2 goal, Vec2 direction,
+                                                    const ObstacleProbe& probe);
     struct ObstacleAvoidance
     {
         bool active{};

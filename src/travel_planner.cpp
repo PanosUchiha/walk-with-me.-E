@@ -98,10 +98,14 @@ namespace Wayfarer
         direction = SmoothDirection(direction, acceptedDirection, dt, t.directionSharpness);
         speed += (rawSpeed - speed) * (1.0F - std::exp(-4.0F * dt));
 
-        const float extra = std::clamp((210.0F - speed) / 85.0F, 0.0F, 1.0F) * 140.0F;
-        routingLead += (extra - routingLead) * (1.0F - std::exp(-4.0F * dt));
-        const float desiredLead = std::min(speed * t.lookAhead, t.maxPrediction);
-        const float rate = desiredLead > lead ? 4.0F : 0.7F;
+        // While the formation heading catches a sharp turn, shorten prediction
+        // along the old heading instead of sending its marker across the corner.
+        const float alignment = std::clamp(incoming.x * direction.x + incoming.y * direction.y, 0.0F, 1.0F);
+        const float turnScale = alignment * alignment;
+        const float extra = std::clamp((210.0F - speed) / 85.0F, 0.0F, 1.0F) * 140.0F * turnScale;
+        routingLead += (extra - routingLead) * (1.0F - std::exp(-(extra < routingLead ? 12.0F : 4.0F) * dt));
+        const float desiredLead = std::min(speed * t.lookAhead, t.maxPrediction) * turnScale;
+        const float rate = desiredLead > lead ? 4.0F : (alignment < .94F ? 12.0F : 0.7F);
         lead += (desiredLead - lead) * (1.0F - std::exp(-rate * dt));
         if (t.turnDelay <= 0) {
             anchor = a_position;
@@ -396,6 +400,11 @@ namespace Wayfarer
         }
         if (!ownsPackage) {
             return sinceRepath >= 1.0F;
+        }
+        // A static destination can still have a failed route. Retry before the
+        // stall timeout releases the lease, with a full second between retries.
+        if (stalledTime >= 1.0F && sinceRepath >= 1.0F) {
+            return true;
         }
         if (pace != submittedPace) {
             return true;

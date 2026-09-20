@@ -16,6 +16,38 @@ namespace Wayfarer
             return std::hypot(a.x - b.x, a.y - b.y);
         }
     } // namespace
+    std::optional<GroundPoint> FitFormationCorridor(GroundPoint origin, Vec2 goal, Vec2 direction,
+                                                    const ObstacleProbe& probe)
+    {
+        if (!Finite(origin) || !std::isfinite(goal.x) || !std::isfinite(goal.y) ||
+            !std::isfinite(direction.x) || !std::isfinite(direction.y) || !probe) {
+            return {};
+        }
+        const auto right = RightFromForward(Normalize(direction));
+        const float lateral = (goal.x - origin.x) * right.x + (goal.y - origin.y) * right.y;
+        auto checked = [&](Vec2 target) -> std::optional<GroundPoint> {
+            auto hit = probe(origin, target);
+            if (!hit || !Finite(*hit) || std::hypot(hit->x - target.x, hit->y - target.y) > 2) {
+                return {};
+            }
+            return hit;
+        };
+        for (float width : {1.0F, .5F, 0.0F}) {
+            if (auto hit = checked(
+                    {goal.x - right.x * lateral * (1 - width), goal.y - right.y * lateral * (1 - width)})) {
+                return hit;
+            }
+        }
+        const Vec2 center{goal.x - right.x * lateral, goal.y - right.y * lateral};
+        for (float reach : {.5F, .25F}) {
+            if (auto hit = checked(
+                    {origin.x + (center.x - origin.x) * reach, origin.y + (center.y - origin.y) * reach})) {
+                return hit;
+            }
+        }
+        return {};
+    }
+
     bool UseLocalObstacleSteering(bool wilderness, bool handGuided, bool distantCatchup, float playerDistance)
     {
 

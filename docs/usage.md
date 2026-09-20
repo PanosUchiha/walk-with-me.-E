@@ -105,8 +105,10 @@ Stairs and ramps work within the height limit; load doors are not crossed.
 
 Walking banter is on by default. Eligible pairs can talk while moving, but scenes
 with their own packages or other restrictions keep control. No voiced lines are added.
-Victory reactions are on by default after a fight with at least three enemies:
-applause with empty hands, or a cheer with a drawn sword or greatsword.
+Victory reactions are on by default after a won fight with at least three enemies.
+Nearby eligible teammates receive a rotating mix of shoulder recovery, applause,
+brow wiping and hand inspection. An armed reaction can precede recovery after
+natural sheathing. See [victory.md](victory.md) for equipment and interruption limits.
 
 ## Gestures and hand holding
 
@@ -140,5 +142,5 @@ Send your runtime version, follower mods, location and `Walk With Me.log`.
 The log is in your game's SKSE log folder. Include video for animation problems.
 
 Gesture setup: see docs/gestures.md in the source or GESTURES.md in the mod ZIP.
-The GPMA patch is included. Let its files win over GPMA, then regenerate with your
+The GPMA patch is in the optional Command Gestures download. Let its files win over GPMA, then regenerate with your
 existing Nemesis or Pandora setup. Do not replace another modlist's generated graph.

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <queue>
 #include <unordered_map>
+#include <vector>
 
 namespace Wayfarer
 {
@@ -103,6 +104,46 @@ namespace Wayfarer
         GroundPoint point;
         float routeLength{};
     };
+    // Nearby connected formation destinations when a straight projection stops
+    // at a bend. Native AI still computes the route through the linked triangles.
+    inline std::vector<GroundPoint> ConnectedFormationDestinations(GroundPoint origin, Vec2 goal,
+                                                                   Vec2 direction,
+                                                                   const RestReachability& area,
+                                                                   const GroundQuery& query)
+    {
+        struct Candidate
+        {
+            float score;
+            GroundKey key;
+            GroundPoint point;
+        };
+        std::vector<Candidate> candidates;
+        const auto forward = Normalize(direction);
+        for (const auto& [key, distance] : area.distance) {
+            auto triangle = query(key);
+            if (!triangle) {
+                continue;
+            }
+            const auto point = GroundCenter(*triangle);
+            const float advance = (point.x - origin.x) * forward.x + (point.y - origin.y) * forward.y;
+            if (advance < 110 || distance > 900 || std::abs(point.z - origin.z) > 192) {
+                continue;
+            }
+            const float score = std::hypot(point.x - goal.x, point.y - goal.y) + distance * .2F;
+            candidates.push_back({score, key, point});
+        }
+        std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+            return a.score == b.score ? a.key < b.key : a.score < b.score;
+        });
+        std::vector<GroundPoint> result;
+        for (const auto& candidate : candidates) {
+            result.push_back(candidate.point);
+            if (result.size() == 8) {
+                break;
+            }
+        }
+        return result;
+    }
     inline bool RestArrived(GroundPoint actor, GroundPoint destination)
     {
         return std::hypot(actor.x - destination.x, actor.y - destination.y) < 75 &&

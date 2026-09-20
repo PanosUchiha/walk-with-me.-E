@@ -230,8 +230,8 @@ namespace Wayfarer
         initialized = true;
         companionPush.ticket = static_cast<std::int32_t>(GetTickCount64() & 0x3fffffff);
         InitializeVictoryEvents();
-        logger::info("[Following] Rollback r1: 0.16.7 movement, alias lifecycle and AI refresh; victory r3 "
-                     "and rest HUD r3 retained");
+        logger::info("[Following] Baseline r9: September 19 r3 movement restored; "
+                     "victory r5 reactions and separate command gestures retained");
         logger::info(
             "[Enrollment] NFF roster guard r1: active slots authoritative; teammate-only fallback disabled");
         logger::info("[PackageControl] Popup r1: explicit per-save travel and rest control");
@@ -2015,7 +2015,44 @@ namespace Wayfarer
         const Vec2 aim{ordinaryAim.x + (rearAim.x - ordinaryAim.x) * rearBlend,
                        ordinaryAim.y + (rearAim.y - ordinaryAim.y) * rearBlend};
         const float lead = Length({aim.x - desired.x, aim.y - desired.y});
-        auto target = navigation.Resolve(playerPos, aim, direction);
+        ObstaclePlan corridor;
+        auto target = settings.forwardCollision && !handGuided
+                          ? navigation.ResolveClear(player, aim, direction, corridor)
+                          : navigation.Resolve(playerPos, aim, direction);
+        bool connectedRoute = false;
+        if (settings.forwardCollision && !handGuided) {
+            const auto searchDirection =
+                mode == FormationMode::kLead
+                    ? direction
+                    : Normalize({aim.x - playerPos.x, aim.y - playerPos.y}, direction);
+            const float advance = target ? (target->x - playerPos.x) * searchDirection.x +
+                                               (target->y - playerPos.y) * searchDirection.y
+                                         : 0;
+            const float requestedAdvance =
+                (aim.x - playerPos.x) * searchDirection.x + (aim.y - playerPos.y) * searchDirection.y;
+            if (requestedAdvance >= 160 && advance < std::clamp(requestedAdvance * .7F, 110.0F, 240.0F)) {
+                if (auto ahead = navigation.ResolveConnected(player, aim, searchDirection)) {
+                    target = ahead;
+                    connectedRoute = true;
+                    if (settings.traceMovement && traceDue) {
+                        logger::info("[Corridor] {} uses connected navmesh destination beyond bend "
+                                     "({:.0f},{:.0f},{:.0f})",
+                                     actor.GetName(), ahead->x, ahead->y, ahead->z);
+                    }
+                }
+            }
+        }
+        if (settings.traceMovement && traceDue && settings.forwardCollision && !handGuided) {
+            logger::info("[Corridor] {} interior={} desired=({:.0f},{:.0f}) usable={} blocker={:08X} "
+                         "rays={} navRejects={} queryFailed={}",
+                         actor.GetName(), interior, aim.x, aim.y, target.has_value(), corridor.blocker,
+                         corridor.rays, corridor.navRejects, corridor.queryFailed);
+            logger::info("[CorridorPosition] {} cell={:08X} actor=({:.0f},{:.0f},{:.0f}) "
+                         "player=({:.0f},{:.0f},{:.0f}) target=({:.0f},{:.0f},{:.0f}) connected={}",
+                         actor.GetName(), player.GetParentCell()->GetFormID(), pos.x, pos.y, pos.z,
+                         playerPos.x, playerPos.y, playerPos.z, target ? target->x : aim.x,
+                         target ? target->y : aim.y, target ? target->z : playerPos.z, connectedRoute);
+        }
         if (!target) {
             LogDiagnostic(actor.GetFormID(), actor.GetName(), "no usable travel corridor; yielding");
             ReleaseTravel(f, &actor);
@@ -2027,8 +2064,8 @@ namespace Wayfarer
             settings.forwardCollision &&
             UseLocalObstacleSteering(!interior && ContextFor(player) == RestContext::Wilderness &&
                                          ContextFor(actor) == RestContext::Wilderness,
-                                     false, f.distantCatchup, playerDistance);
-        if (localObstacles) {
+                                     handGuided, f.distantCatchup, playerDistance);
+        if (localObstacles && !connectedRoute) {
             RE::NiPoint3 velocity{};
             actor.GetLinearVelocity(velocity);
             auto avoidance = navigation.AvoidObstacles(
@@ -2103,6 +2140,10 @@ namespace Wayfarer
                 f.goal.Commit(candidate, actorXY, pace);
 
                 actor.EvaluatePackage(false, true);
+                if (settings.traceMovement && f.goal.stalledTime >= 1.0F) {
+                    logger::info("[TravelRetry] {} stalled={:.1f} routeAge={:.2f} ownsPackage={}",
+                                 actor.GetName(), f.goal.stalledTime, f.goal.sinceRepath, ownsPackage);
+                }
                 f.goal.MarkRepathed();
             }
         }

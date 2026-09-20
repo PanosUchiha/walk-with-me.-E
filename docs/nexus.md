@@ -21,8 +21,27 @@ C++ runtime. The SE/AE package targets 1.5.97, selected 1.6.x builds and
 See the download README for the exact runtime list.
 
 Command gestures are optional. They need First Person Interactions, Open Animation
-Replacer and generated GP Offset Movement Animation behavior. Third-person clips
-are bundled; FPI's first-person clips are separate. Gesture Animation Remix is not needed.
+Replacer, the full Offset Movement Animation mod, the matching **Command Gestures**
+optional download and regenerated GPMA behavior. Install GPMA before the add-on,
+let the add-on win its seven source-file conflicts, then Update Engine and generate
+with **GP Offset Movement Animation** enabled. Launch the generator through MO2
+when using MO2; deploy mods before running it with Vortex.
+Third-person clips are in the add-on; FPI's first-person clips are separate.
+Gesture Animation Remix is not needed.
+
+Open Animation Replacer is also needed for the shoulder recovery animation and
+locally generated clasp poses. The base follower features do not require a
+behavior generator.
+
+Animation requirements:
+- [Open Animation Replacer](https://www.nexusmods.com/skyrimspecialedition/mods/92109): command signals, shoulder recovery and optional clasp poses.
+- [First Person Interactions](https://www.nexusmods.com/skyrimspecialedition/mods/123129): command signals, including the shared trigger used in third person.
+- [Offset Movement Animation](https://www.nexusmods.com/skyrimspecialedition/mods/110408): command signals; install the complete mod and regenerate with Nemesis or Pandora.
+
+The OAR Detection Plugin is not used by WWM's own animation configs. If OAR names
+that plugin in an error, follow the requirements of the animation pack using it.
+It does not fix missing WWM conditions. `requiredPlugin: "Walk With Me"` is correct:
+it identifies the SKSE condition provider, not the ESP filename.
 
 Hand holding is experimental and off by default. It uses a TETHER-based physics grip and authored clasp poses. Generate the optional
 clasp clips from your own Skyrim files using HAND_HOLDING.md. The public archive
@@ -39,6 +58,9 @@ ThirdParty/TETHER-LICENSE.txt and TETHER-NOTICE.txt.
 
 Close Skyrim, replace the old mod through MO2 or Vortex and enable `Wayfarer.esp`.
 Keep the INI to retain settings. Do not rename Wayfarer files or install two copies.
+When upgrading from the combined 0.2.0 archive, replace rather than merge so old
+GPMA patch files and signal configs do not remain. Install the new optional gesture
+add-on only with its requirements. Regenerate after adding or removing the patch.
 
 ## Source and license
 
@@ -46,5 +68,5 @@ GPL-3.0-or-later with the included exceptions. Asset licenses and credits are in
 ThirdParty. Download the matching complete Source.zip from the same release.
 
 Gesture setup: see docs/gestures.md in the source or GESTURES.md in the mod ZIP.
-The GPMA patch is included. Let its files win over GPMA, then regenerate with your
+The GPMA patch is in the Command Gestures optional download. Let its files win over GPMA, then regenerate with your
 existing Nemesis or Pandora setup. Do not replace another modlist's generated graph.

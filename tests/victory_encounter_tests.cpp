@@ -18,6 +18,11 @@ void Check(bool value, const char* message)
 
 int main()
 {
+    Check(!CancelReaction(false, false, false), "brief player movement preserves pending reactions");
+    Check(!CancelReaction(false, false, true), "pending reaction can start after player settles");
+    Check(CancelReaction(true, false, false), "player interruption still stops an active idle");
+    Check(CancelReaction(false, true, true), "renewed combat cancels queued reactions");
+    Check(CancelReaction(true, true, true), "renewed combat cancels active reactions");
     {
         constexpr std::uint64_t queuedAt = 7;
         Check(!HandoffComplete(queuedAt, 7), "cleared alias alone cannot bypass in-flight cleanup");
@@ -245,52 +250,42 @@ int main()
     }
 
     {
-        for (std::uint32_t variant = 0; variant < 12; ++variant) {
-            const auto empty = ChooseIdle(Equipment::EmptyHands, variant);
-            Check(empty.form && !empty.armed, "empty hands always get an unarmed applause idle");
-            for (const auto gear : {Equipment::Sword, Equipment::Greatsword}) {
-                const auto armed = ChooseIdle(gear, variant);
-                Check(armed.form == 0xF7C8C && armed.armed,
-                      "drawn swords always cheer, never clap with a blade");
+        for (std::uint32_t variant = 0; variant < 32; ++variant) {
+            for (const auto gear : {Equipment::Sword, Equipment::Greatsword, Equipment::OtherDrawn}) {
+                const auto armed = ChooseIdle(gear, variant, true);
+                Check(armed.form && armed.armed && !armed.shoulder,
+                      "every supported drawn category gets an armed first phase even with shoulder selected");
             }
-            Check(!ChooseIdle(Equipment::Unsupported, variant).form,
-                  "unsupported drawn equipment waits rather than using applause");
-            Check(!ChooseIdle(Equipment::Transition, variant).form,
-                  "draw/sheath transitions wait for stable equipment");
+            Check(!ChooseIdle(Equipment::Transition, variant, true).form,
+                  "drawing and sheathing wait for the equipment graph to settle");
+            Check(!ChooseIdle(Equipment::Unsupported, variant, true).form,
+                  "unknown equipment never forces a human gesture");
+            Check(!ChooseIdle(Equipment::EmptyHands, variant, true).shoulder,
+                  "drawn bare fists do not select the sheathed shoulder clip");
         }
-        Check(ChooseIdle(Equipment::EmptyHands, 0).form == 0xD8731,
-              "the existing tavern applause event is in the pool");
-        Check(ChooseIdle(Equipment::EmptyHands, 1).form != ChooseIdle(Equipment::EmptyHands, 0).form,
-              "unarmed reactions vary");
-        Check(startWindowSeconds > reactionSeconds && retrySeconds > 0,
-              "reaction retries are bounded by a finite start window");
-    }
-    {
-        unsigned shoulders = 0;
-        for (std::uint32_t variant = 0; variant < 100; ++variant) {
-            const auto sheathed = ChooseIdle(Equipment::Sheathed, variant, true);
-            shoulders += sheathed.shoulder ? 1U : 0U;
-            Check(sheathed.form && !sheathed.armed, "fully sheathed companions select an unarmed reaction");
-            Check(sheathed.seconds == (sheathed.shoulder ? 6.5F : 4.9F),
-                  "shoulder recovery gets its full duration without extending applause");
-            const auto fallback = ChooseIdle(Equipment::Sheathed, variant, false);
-            Check(fallback.form && !fallback.shoulder,
-                  "missing OAR or authored assets preserves ordinary applause");
-            for (const auto gear : {Equipment::EmptyHands, Equipment::Sword, Equipment::Greatsword,
-                                    Equipment::Unsupported, Equipment::Transition}) {
-                Check(
-                    !ChooseIdle(gear, variant, true).shoulder,
-                    "shoulder recovery never starts while drawn, drawing or sheathing, including bare fists");
+        for (unsigned sequence = 0; sequence < 12; ++sequence) {
+            unsigned shoulders = 0, subtle = 0, claps = 0;
+            for (unsigned member = 0; member < 4; ++member) {
+                const auto variant = PartyVariation(member, sequence);
+                const auto choice = ChooseIdle(Equipment::Sheathed, variant, true);
+                shoulders += choice.shoulder;
+                subtle += choice.form == 0x977EC || choice.form == 0x75C3D;
+                claps += !choice.shoulder && choice.form != 0x977EC && choice.form != 0x75C3D;
+                Check(choice.form && choice.seconds > 0, "every eligible party member receives a reaction");
+                Check(ChooseIdle(Equipment::Sheathed, variant, false).form != 0,
+                      "unavailable shoulder assets leave a valid fallback");
             }
+            Check(shoulders == 1 && subtle == 2 && claps == 1,
+                  "a four-member party gets shoulder, two subtle recoveries and one applause");
+            Check(ChooseIdle(Equipment::Sheathed, PartyVariation(0, sequence), true).shoulder,
+                  "even a small party reserves a shoulder selection");
         }
-        Check(shoulders == 25, "shoulder recovery is one of four equal sheathed choices");
-        for (const auto gear : {Equipment::EmptyHands, Equipment::Sword, Equipment::Greatsword,
-                                Equipment::Unsupported, Equipment::Transition}) {
-            Check(!ChooseIdle(gear, 3, true).form, "a selected shoulder reaction waits instead of being "
-                                                   "consumed by an armed cheer before sheathing");
-        }
-        Check(ChooseIdle(Equipment::Sheathed, 3, true).shoulder,
-              "the same pending selection plays after sheathing completes");
+        Check(ChooseIdle(Equipment::Sheathed, 3, true).seconds == 6.5F,
+              "authored shoulder clip retains its complete duration");
+        Check(WaitForIdleOwnership(.03F) && !WaitForIdleOwnership(.51F),
+              "asynchronous idle startup cannot clear the OAR selection next frame");
+        Check(RetryEarlyIdleLoss(.51F, 1) && !RetryEarlyIdleLoss(.51F, 3) && !RetryEarlyIdleLoss(2, 1),
+              "early lost starts retry within a bounded attempt count");
         ShoulderSelections selections;
         selections.Set(0, true);
         Check(!selections.Contains(0), "invalid actors cannot own a shoulder replacement");
@@ -298,7 +293,12 @@ int main()
         selections.Set(200, true);
         Check(selections.Contains(100) && selections.Contains(200) && !selections.Contains(300),
               "OAR selection is scoped to individual reacting companions");
+        selections.Observe(100);
+        selections.Observe(300);
+        Check(selections.WasObserved(100) && !selections.WasObserved(300),
+              "OAR observation is recorded only for selected companions");
         selections.Set(100, false);
+        Check(!selections.WasObserved(100), "completion clears OAR observation");
         Check(!selections.Contains(100) && selections.Contains(200),
               "ending one reaction leaves another companion's reaction intact");
         selections.Set(200, false);

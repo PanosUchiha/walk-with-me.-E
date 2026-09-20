@@ -1,6 +1,6 @@
 #include "victory_animation.h"
-#include "OpenAnimationReplacerAPI-Conditions.h"
 #include "Plugin.h"
+#include "oar_conditions.h"
 #include "victory_reaction.h"
 
 namespace Wayfarer::Victory::Animation
@@ -36,18 +36,26 @@ namespace Wayfarer::Victory::Animation
             REL::Version GetRequiredVersion() const override { return {0, 2, 0}; }
             RE::BSString GetRequiredPluginName() const override { return Plugin::NAME.data(); }
             RE::BSString GetRequiredPluginAuthor() const override { return "Codex and Tobih"; }
+            Conditions::ConditionAPIVersion GetConditionAPIVersion() const override
+            {
+                return OAR::CustomConditionVersion();
+            }
 
           protected:
             bool EvaluateImpl(RE::TESObjectREFR* reference, RE::hkbClipGenerator*, void*) const override
             {
-                return Selected(reference);
+                const bool selected = Selected(reference);
+                if (selected) {
+                    selections.Observe(reference->GetFormID());
+                }
+                return selected;
             }
         };
     } // namespace
 
     void Register()
     {
-        auto* api = OAR_API::Conditions::GetAPI();
+        auto* api = OAR::Interface().api;
         if (api) {
             registered =
                 api->AddCustomCondition(SKSE::GetPluginHandle(), Plugin::NAME.data(), Plugin::VERSION,
@@ -76,5 +84,9 @@ namespace Wayfarer::Victory::Animation
     void Clear()
     {
         selections.Clear();
+    }
+    bool WasObserved(std::uint32_t actor)
+    {
+        return selections.WasObserved(actor);
     }
 } // namespace Wayfarer::Victory::Animation

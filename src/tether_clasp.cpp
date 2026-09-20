@@ -1,6 +1,6 @@
 #include "tether_clasp.h"
-#include "OpenAnimationReplacerAPI-Conditions.h"
 #include "Plugin.h"
+#include "oar_conditions.h"
 
 namespace Wayfarer::HandHolding::Clasp
 {
@@ -24,6 +24,10 @@ namespace Wayfarer::HandHolding::Clasp
             REL::Version GetRequiredVersion() const override { return {0, 2, 0}; }
             RE::BSString GetRequiredPluginName() const override { return Plugin::NAME.data(); }
             RE::BSString GetRequiredPluginAuthor() const override { return "Codex and Tobih"; }
+            Conditions::ConditionAPIVersion GetConditionAPIVersion() const override
+            {
+                return OAR::CustomConditionVersion();
+            }
 
           protected:
             bool EvaluateImpl(RE::TESObjectREFR* actor, RE::hkbClipGenerator*, void*) const override
@@ -40,7 +44,7 @@ namespace Wayfarer::HandHolding::Clasp
     } // namespace
     void Register()
     {
-        auto* api = OAR_API::Conditions::GetAPI();
+        auto* api = OAR::Interface().api;
         if (api) {
             const auto left = api->AddCustomCondition(
                 SKSE::GetPluginHandle(), Plugin::NAME.data(), Plugin::VERSION, "WWM_TetherClaspL",

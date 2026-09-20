@@ -509,8 +509,7 @@ namespace Wayfarer::HandHolding
                 const float lateral = delta.x * direction.y - delta.y * direction.x;
                 const float heading = std::remainder(partner->GetAngleZ() - player.GetAngleZ(), 6.283185307F);
                 const int side = gripLeft ? -1 : 1;
-                const bool settled =
-                    TetherHeadingSettled(heading, lateral, side, followerVelocity.Length());
+                const bool settled = TetherHeadingSettled(heading, lateral, side, followerVelocity.Length());
                 // Only turn the stationary follower after WWM's package is gone,
                 // and before adding any physics bodies. This cannot steer normal travel.
                 if (session.offset && !session.player && !session.pending && !settled &&
@@ -525,9 +524,9 @@ namespace Wayfarer::HandHolding
                 const auto gap = WristGap(player, *partner, gripLeft);
                 const auto limit = GripGap();
                 const bool aligned =
-                    session.offset && TetherAlignedGrip(distance, delta.z, gap, visible,
-                                                        tuning.connectDistance, lateral, side, heading,
-                                                        velocity.Length(), followerVelocity.Length(), limit);
+                    session.offset &&
+                    TetherAlignedGrip(distance, delta.z, gap, visible, tuning.connectDistance, lateral, side,
+                                      heading, velocity.Length(), followerVelocity.Length(), limit);
                 contactTime = aligned ? contactTime + dt : 0;
                 gripReady = contactTime >= .15F;
                 if (acquireTime > 8) {
@@ -536,18 +535,17 @@ namespace Wayfarer::HandHolding
                 }
                 if (traceTime >= 1) {
                     const auto* package = partner->GetCurrentPackage();
-                    logger::info(
-                        "[HandHolding/TETHER] Session {} gate={} root={:.1f} wrist={:.1f}/{:.1f} "
-                        "height={:.1f} LOS={} package={:08X} heading={:.2f} followerSpeed={:.1f}",
-                        token,
-                        !handoff.ready     ? "alias cleanup"
-                        : !session.offset  ? "offset dispatch"
-                        : !bodiesReady     ? "follower turn"
-                        : !session.player || !session.follower ? "ragdoll bodies"
-                        : !gripReady                           ? "grip proximity"
-                                                               : "constraint callback",
-                        distance, gap, limit, delta.z, visible, package ? package->GetFormID() : 0, heading,
-                        followerVelocity.Length());
+                    logger::info("[HandHolding/TETHER] Session {} gate={} root={:.1f} wrist={:.1f}/{:.1f} "
+                                 "height={:.1f} LOS={} package={:08X} heading={:.2f} followerSpeed={:.1f}",
+                                 token,
+                                 !handoff.ready                         ? "alias cleanup"
+                                 : !session.offset                      ? "offset dispatch"
+                                 : !bodiesReady                         ? "follower turn"
+                                 : !session.player || !session.follower ? "ragdoll bodies"
+                                 : !gripReady                           ? "grip proximity"
+                                                                        : "constraint callback",
+                                 distance, gap, limit, delta.z, visible, package ? package->GetFormID() : 0,
+                                 heading, followerVelocity.Length());
                 }
                 Pump();
             }

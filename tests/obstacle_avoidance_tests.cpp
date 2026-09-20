@@ -43,6 +43,37 @@ int main()
     auto clear = [](GroundPoint, Vec2 to) -> std::optional<GroundPoint> {
         return GroundPoint{to.x, to.y, 0};
     };
+    {
+        auto open = FitFormationCorridor(origin, {160, 300}, {0, 1}, clear);
+        Check(open && open->x == 160 && open->y == 300, "open space preserves formation width");
+        auto gate = [&](GroundPoint, Vec2 to) -> std::optional<GroundPoint> {
+            // A 100-unit opening, allowing the 28-unit radius on each side.
+            if (std::abs(to.x) > 22) {
+                return {};
+            }
+            return GroundPoint{to.x, to.y, 0};
+        };
+        auto narrow = FitFormationCorridor(origin, {160, 300}, {0, 1}, gate);
+        Check(narrow && narrow->x == 0 && narrow->y == 300,
+              "gateposts collapse a wide formation onto the traversable centerline");
+        auto bend = [&](GroundPoint, Vec2 to) -> std::optional<GroundPoint> {
+            if (std::abs(to.x) > 22 || to.y > 170) {
+                return {};
+            }
+            return GroundPoint{to.x, to.y, 0};
+        };
+        auto shortRoute = FitFormationCorridor(origin, {160, 300}, {0, 1}, bend);
+        Check(shortRoute && shortRoute->x == 0 && shortRoute->y == 150,
+              "cave bend shortens prediction before assigning a goal beyond the wall");
+        auto partial = [](GroundPoint, Vec2) -> std::optional<GroundPoint> { return GroundPoint{0, 10, 0}; };
+        Check(!FitFormationCorridor(origin, {160, 300}, {0, 1}, partial),
+              "a clipped navmesh edge cannot masquerade as a clear formation destination");
+        auto missing = [](GroundPoint, Vec2) -> std::optional<GroundPoint> { return {}; };
+        Check(!FitFormationCorridor(origin, {160, 300}, {0, 1}, missing),
+              "disconnected navmesh yields to native following instead of crossing walls");
+        auto rear = FitFormationCorridor(origin, {160, -300}, {0, 1}, gate);
+        Check(rear && rear->x == 0 && rear->y == -300, "rear formations compress behind the player");
+    }
     auto result = state.Plan(origin, goal, 90, .15F, 65, clear);
     Check(result.route == ObstacleRoute::Direct && result.target.y == 1500,
           "open ground retains the full formation destination");

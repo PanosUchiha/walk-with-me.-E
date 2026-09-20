@@ -8,6 +8,7 @@ import struct
 import subprocess
 import sys
 import zipfile
+from animation_package import split_gestures, verify_patch
 
 
 def payload(value):
@@ -79,7 +80,9 @@ def main():
     release.mkdir(parents=True, exist_ok=True)
     binary_zip = release / f'Walk-With-Me-{version}-SE-AE.zip'
     source_zip = release / f'Walk-With-Me-{version}-Source.zip'
-    assert not binary_zip.exists() and not source_zip.exists(), 'Release archives already exist'
+    gesture_zip = release / f'Walk-With-Me-{version}-Command-Gestures.zip'
+    assert not any(p.exists() for p in (binary_zip, source_zip, gesture_zip)), 'Release archives already exist'
+    verify_patch(package / 'Nemesis_Engine/mod/gpma/0_master')
     subprocess.run([sys.executable, str(root / 'tools/verify-package.py'), str(package), '--public'], check=True)
     dll = root / 'build/modern/bin/Release/Wayfarer.dll'
     verify_dll(dll.read_bytes(), version)
@@ -101,7 +104,10 @@ def main():
     }.items():
         files[output] = root / 'docs' / document
     for name in ('build.md', 'publish.md', 'gog.md', 'hotkeys.md', 'package-control.md',
-                 'party-orders-utilities.md', 'custom-followers.md', 'victory.md', 'testing.md', 'api-guide.md'):
+                 'party-orders-utilities.md', 'custom-followers.md', 'victory.md', 'testing.md', 'api-guide.md',
+                 'animation-hotfix-audit.md', 'reactions-pathing-review.md', 'actor-routes-victory-r5.md',
+                 'bridge-startup-r6.md', 'control-handoff-r7.md', 'reset-cadence-r8.md',
+                 'r3-movement-r9.md', 'baseline-0.2.1.md'):
         files['docs/' + name] = root / 'docs' / name
 
     files['ClaspGenerator/build-tether-clasp-clips.py'] = root / 'tools/build-tether-clasp-clips.py'
@@ -137,10 +143,9 @@ def main():
             config = json.loads(payload(files[name]))
             for condition in config.get('conditions', []):
                 if condition.get('requiredPlugin') == 'Walk With Me':
-                    assert condition['requiredVersion'] == version + '.0', name
-    files['manifest.sha256'] = ''.join(
-        f'{hashlib.sha256(payload(value)).hexdigest()}  {name}\n' for name, value in sorted(files.items())).encode()
-
+                    # This is the minimum condition implementation version, not
+                    # the current release label. Existing 0.2.0 clips remain valid.
+                    assert condition['requiredVersion'] == '0.2.0.0', name
     source = {}
     extensions = {'.cpp', '.h', '.py', '.ps1', '.md', '.txt', '.json', '.toml', '.cmake', '.in', '.svg', '.ini', '.psc'}
     for folder in ('src', 'include', 'tests', 'tools', 'docs', 'cmake', 'LICENSES', 'third_party', 'assets'):
@@ -177,7 +182,19 @@ def main():
         for value in mapping.values():
             if isinstance(value, Path):
                 assert value.is_file(), value
+    files, gestures = split_gestures(files)
+    gestures['GESTURES.md'] = root / 'docs/gestures.md'
+    for name in ('LICENSE', 'LICENSING.md', 'EXCEPTIONS.md'):
+        gestures[name] = root / name
+    for path in (package / 'ThirdParty').rglob('*'):
+        if path.is_file():
+            gestures[path.relative_to(package).as_posix()] = path
+    for mapping in (files, gestures):
+        mapping['manifest.sha256'] = ''.join(
+            f'{hashlib.sha256(payload(value)).hexdigest()}  {name}\n'
+            for name, value in sorted(mapping.items())).encode()
     write_archive(binary_zip, files)
+    write_archive(gesture_zip, gestures)
     write_archive(source_zip, source)
     (release / f'Walk-With-Me-{version}-CHANGELOG.md').write_bytes((root / f'docs/changes-{version}.md').read_bytes())
 

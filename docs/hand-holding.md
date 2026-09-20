@@ -17,17 +17,17 @@ hand-clasp acquisition stays disabled; the rest of Walk With Me still works.
 3. Open a terminal in the extracted `ClaspGenerator` folder from the mod archive:
 
    ```powershell
-   py -3 build-tether-clasp-clips.py --animations "C:/Extracted/meshes/actors/character/animations" --output "C:/Generated/Walk-With-Me-0.2.0-Clasp"
+   py -3 build-tether-clasp-clips.py --animations "C:/Extracted/meshes/actors/character/animations" --output "C:/Generated/Walk-With-Me-0.2.1-Clasp"
    ```
 
 4. The script checks all inputs, generates and validates 68 clips, then creates
-   `Walk-With-Me-0.2.0-Clasp.zip` beside the output folder. It will not overwrite
+   `Walk-With-Me-0.2.1-Clasp.zip` beside the output folder. It will not overwrite
    an existing output. Install that ZIP after the main mod in MO2 or Vortex.
 5. Restart Skyrim before testing. No behavior regeneration is needed for the
    clasp clips. Optional command gestures have separate GPMA setup instructions.
 
 Regenerate the clasp package when upgrading from a local 0.16.8 build. The new
-OAR condition files use the 0.2.0 plugin version; the old higher version requirement
+OAR condition files require plugin version 0.2.0 or later; the old higher version requirement
 would prevent those conditions from loading.
 
 Keep the generated ZIP local. It contains data from your own game files and is

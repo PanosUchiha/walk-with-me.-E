@@ -101,7 +101,8 @@ namespace Wayfarer::CommandGesture
     {
         auto* p = RE::PlayerCharacter::GetSingleton();
         bool active = false;
-        return p && Trigger() && p->GetGraphVariableBool("bOffsetGPMA", active) &&
+        return GetModuleHandleA("OpenAnimationReplacer.dll") && p && Trigger() &&
+               p->GetGraphVariableBool("bOffsetGPMA", active) &&
                std::filesystem::exists("Data/meshes/OpenAnimationReplacer/FP Interact/Wave "
                                        "Children/Actors/Character/Animations/GPMAOffsetAnimation.hkx");
     }

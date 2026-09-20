@@ -5,6 +5,10 @@ import sys
 import hashlib
 
 root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / 'package'
+from animation_package import verify_patch
+patch = root / 'Nemesis_Engine/mod/gpma/0_master'
+if patch.exists():
+    verify_patch(patch)
 data = (root / 'Wayfarer.esp').read_bytes()
 
 def u32(b, offset=0):
