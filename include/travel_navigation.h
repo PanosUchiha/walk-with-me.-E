@@ -1,5 +1,6 @@
 #pragma once
 
+#include "follower_catchup.h"
 #include "obstacle_avoidance.h"
 #include "rest_navigation.h"
 #include "travel_planner.h"
@@ -20,10 +21,20 @@ namespace Wayfarer
                                                                ObstaclePlan& diagnostics) const;
         [[nodiscard]] std::optional<RE::NiPoint3> AttachmentPoint(RE::NiPoint3 origin,
                                                                   RE::NiPoint3 goal) const;
+        // Teleport landings. Unlike AttachmentPoint these accept any slope: the
+        // straight probe only needs connected navmesh between origin and goal.
+        [[nodiscard]] std::optional<RE::NiPoint3> LandingPoint(RE::NiPoint3 origin, RE::NiPoint3 goal) const;
+        [[nodiscard]] std::optional<RE::NiPoint3> GroundAt(RE::NiPoint3 position, float maxHeight = 96.0F) const;
+        // Centers of navmesh triangles reachable on foot from origin, in a ring around it.
+        [[nodiscard]] std::vector<LandingCandidate> LandingSpots(RE::NiPoint3 origin, float minDistance,
+                                                                 float maxDistance) const;
         [[nodiscard]] RestReachability RestArea(RE::NiPoint3 origin, RE::NiPoint3 center, float radius,
                                                 float height) const;
         [[nodiscard]] std::optional<RestDestination> FindRestDestination(const RestReachability& area,
                                                                          RE::NiPoint3 goal) const;
+        // Centers of reachable triangles in a ring around the rest anchor.
+        [[nodiscard]] std::vector<RestDestination> RestSpots(const RestReachability& area, RE::NiPoint3 center,
+                                                             float minDistance, float maxDistance) const;
         [[nodiscard]] ObstaclePlan AvoidObstacles(RE::Actor& actor, RE::NiPoint3 goal, float speed, float dt,
                                                   float arrivalRadius, ObstacleAvoidance& state) const;
 
@@ -41,7 +52,8 @@ namespace Wayfarer
         [[nodiscard]] std::optional<GroundTriangle> RestTriangle(GroundKey key) const;
         [[nodiscard]] std::optional<Location> Neighbor(Location a_location, int a_edge) const;
         [[nodiscard]] std::optional<RE::NiPoint3> Trace(RE::NiPoint3 a_origin, Vec2 a_goal,
-                                                        std::optional<float> stepHeight = {}) const;
+                                                        std::optional<float> stepHeight = {},
+                                                        bool exact = false) const;
         std::vector<RE::BSTSmartPointer<RE::BSNavmesh>> meshes;
         std::optional<Location> start;
     };

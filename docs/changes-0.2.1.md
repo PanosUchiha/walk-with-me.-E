@@ -17,8 +17,7 @@ comparison and keeps the animation fixes developed alongside it.
 - Fixes the GPMA patch formatting used by Nemesis's line-based reader.
 - Ships command signals and their behavior patch as a separate optional
   **Command Gestures** ZIP. See [gestures.md](gestures.md) for requirements.
-- Retains OAR condition registration fixes, the authored shoulder recovery and
-  varied post-combat party reactions, including armed reactions where supported.
+- Post-victory reactions, voice requests and their settings are shelved. The experiment is archived locally; release builds exclude its runtime and animation assets.
 - Keeps the minimum of three defeated enemies per encounter and animation-start
   retries. Reactions do not force companions to sheathe their weapons.
 - Keeps the OAR condition minimum at 0.2.0 for existing clip compatibility; DLL

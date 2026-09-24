@@ -18,6 +18,14 @@ namespace Wayfarer::HandHolding
         }
         return normal;
     }
+    // Replace the last approach route immediately with the arrival position,
+    // even within the ordinary refresh/goal thresholds. Do this once per target,
+    // not every frame: repeated EvaluatePackage calls can restart the turn.
+    inline bool RepathArrivalHold(const TravelGoalState& route, Vec2 target)
+    {
+        return !route.hasRoute ||
+               Length({route.submittedGoal.x - target.x, route.submittedGoal.y - target.y}) > .5F;
+    }
     // Each WWM slot has its own package. Restore the value we borrowed, including
     // on dialogue, combat, failed navigation, handoff and load/reset.
     struct ArrivalRadiusLease

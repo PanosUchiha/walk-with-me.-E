@@ -56,7 +56,7 @@ namespace Wayfarer::HandHolding::Clasp
                 left == OAR_API::Conditions::APIResult::OK && right == OAR_API::Conditions::APIResult::OK;
         }
         logger::info("[HandHolding/Clasp] OAR conditions: {}",
-                     registered ? "registered" : "unavailable; grip disabled");
+                     registered ? "registered" : "unavailable; TETHER grip disabled (Classic available)");
     }
     bool Available()
     {

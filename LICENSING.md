@@ -12,6 +12,9 @@ Earlier grants remain valid. Original command animations keep that MIT license.
 Third-party files keep their own licenses:
 
 - SKSE Menu Framework API: LGPL-2.1.
+- zlib puff decompressor: zlib license, Copyright (C) 2002-2013 Mark Adler.
+  Unmodified puff 2.3 from zlib v1.3.1 is in `third_party/zlib-puff`;
+  its notice is also in `package/ThirdParty/Zlib-puff-LICENSE.txt`.
 - Open Animation Replacer conditions SDK: GPL-3.0 with the upstream modding
   and linking exceptions; see `third_party/OpenAnimationReplacer` and the
   corresponding `package/ThirdParty/OpenAnimationReplacer-*` notices.

@@ -1,9 +1,9 @@
-# Walk With Me 0.2.1
+# Walk With Me 0.2.2
 
-This release preserves the user-approved r9 build: September 19 r3 movement,
-later post-combat reactions and a separate gestures add-on. The r5–r8 movement
-experiments are removed. See `docs/baseline-0.2.1.md` for the accepted baseline
-and remaining limitations.
+Animated conversation/loot icons, compact yellow/ivory settings with background
+artwork, richer rest activities, loot scouting, revised teleport catch-up and
+Classic/TETHER hand-holding choices. See CHANGELOG.md for all changes since the
+public 0.2.0 release. Post-victory reactions are shelved.
 
 ## Requirements
 
@@ -28,18 +28,19 @@ and generated GP Offset Movement Animation behavior. Install the matching
 The base archive has neither the GPMA patch nor FPI-dependent signal configs.
 FPI first-person clips are not bundled.
 
-Open Animation Replacer is also required for the authored shoulder reaction and
-optional clasp poses. Generate clasp clips locally using HAND_HOLDING.md; the
-public package ships the generator and codec source instead of game-derived clips.
+The main follower features and Classic hand holding need no behavior generator.
+The optional TETHER method needs Open Animation Replacer and locally generated
+clasp poses. Follow HAND_HOLDING.md; the public package includes the generator and
+codec source. The gesture add-on does not supply these clasp clips.
 
 ## Install
 
-Close Skyrim and install `Walk-With-Me-0.2.1-SE-AE.zip` through your mod manager.
+Close Skyrim and install `Walk-With-Me-0.2.2-SE-AE.zip` through your mod manager.
 Replace the old mod, keep your INI if wanted, and enable `Wayfarer.esp`.
 Do not merge over the old combined download: remove its leftover WWM gesture
 files by replacing the installation. Follow GESTURES.md to install the optional
 add-on and regenerate behaviors, or to remove the old gesture patch.
-Do not rename Wayfarer files or enable two copies.
+Disable old DLL/script test overlays. Do not rename Wayfarer files or enable two copies.
 
 Read USAGE.md for controls, HAND_HOLDING.md for the experimental feature and
 CHANGELOG.md for changes. Read GESTURES.md before generating behaviors. Hand holding is off by default; wrist and turning
@@ -52,5 +53,5 @@ The DLL links CommonLibSSE-NG 7.5.1 at
 The code uses GPL-3.0-or-later with the included exceptions. Asset licenses are
 separate. See LICENSE, LICENSING.md and ThirdParty.
 
-Upload `Walk-With-Me-0.2.1-Source.zip` with this download. It includes mod,
+The matching `Walk-With-Me-0.2.2-Source.zip` includes mod,
 CommonLib and dependency source. Build instructions are in docs/build.md.

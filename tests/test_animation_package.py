@@ -18,7 +18,8 @@ class AnimationPackageTests(unittest.TestCase):
         self.assertFalse(set(base) & set(gestures))
         self.assertFalse(any(n.startswith('Nemesis_Engine/') for n in base))
         self.assertFalse(any('Walk With Me Signals/' in n for n in base))
-        self.assertTrue(any('Walk With Me Victory/' in n for n in base))
+        self.assertFalse(any('Walk With Me Victory/' in n for n in files))
+        self.assertFalse(any('WWM Clasp/' in n for n in files))
 
     def test_shipped_patch(self):
         verify_patch(ROOT / 'package/Nemesis_Engine/mod/gpma/0_master')

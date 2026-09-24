@@ -2,11 +2,12 @@ Walk With Me uses the SKSE Menu Framework 3 API header, dynamically resolving
 the separately installed SKSEMenuFramework.dll. The API is provided by
 QTR-Modding under GNU LGPL 2.1. Its license is included here.
 API source: https://github.com/QTR-Modding/SKSE-Menu-Framework-3-API
-The vendored header is available in Walk With Me's include/SKSEMenuFramework.h.
+The complete source archive contains the vendored header; the Main ZIP also
+provides a copy under ThirdParty/SKSEMenuFramework.h.
 The framework DLL is not redistributed by Walk With Me.
 
-Walk With Me uses Ersh's Open Animation Replacer conditions SDK to scope the
-post-combat shoulder animation to a selected companion. Source revision:
+Walk With Me uses Ersh's Open Animation Replacer conditions SDK to scope optional
+locally generated TETHER clasp poses to the selected actors. Source revision:
 f4e7688b065175aff70aa523073857911e15aca3 from
 https://github.com/ersh1/OpenAnimationReplacer
 The vendored API and its local metadata adaptation are in
@@ -14,15 +15,15 @@ third_party/OpenAnimationReplacer in the matching source archive.
 See OpenAnimationReplacer-COPYING.txt and OpenAnimationReplacer-EXCEPTIONS.txt.
 OpenAnimationReplacer.dll remains a separately installed dependency.
 
-The shoulder recovery under meshes/OpenAnimationReplacer/Walk With Me Victory
-is an original Walk With Me animation authored from the user's reference video.
-It uses the same preserved MIT animation license as the command gestures.
+Post-victory reactions are shelved; their shoulder recovery animation is not
+included in this release.
 
 The seven command-gesture HKX files under meshes/OpenAnimationReplacer/Walk With Me
 Signals are original Walk With Me animations authored for this release. They are
-covered by the preserved MIT license in WalkWithMe-MIT-LICENSE.txt. No Gesture Animation Remix or
-First Person Interactions HKX files are redistributed. Those mods remain separate
-requirements for their respective runtime integration and first-person gestures.
+covered by the preserved MIT license in WalkWithMe-MIT-LICENSE.txt. No Gesture
+Animation Remix or First Person Interactions HKX files are redistributed.
+First Person Interactions and the full Offset Movement Animation mod remain
+separate requirements for command signals. Gesture Animation Remix is not required.
 
 The current DLL links alandtse/CommonLibSSE-NG 7.5.1, revision
 bedcb1e05418baba7b316a650b6180c2dd6007a8, under GPL-3.0-or-later.

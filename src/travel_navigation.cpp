@@ -324,8 +324,26 @@ namespace Wayfarer
                                   radius,
                                   height,
                                   std::clamp(radius * 4.0F, 1200.0F, 5000.0F),
-                                  2048},
+                                  4096},
                                  [&](GroundKey at) { return RestTriangle(at); });
+    }
+
+    std::vector<RestDestination> TravelNavigation::RestSpots(const RestReachability& area, RE::NiPoint3 center,
+                                                             float minDistance, float maxDistance) const
+    {
+        std::vector<RestDestination> spots;
+        for (const auto& [key, distance] : area.distance) {
+            const auto triangle = RestTriangle(key);
+            if (!triangle) {
+                continue;
+            }
+            const auto point = GroundCenter(*triangle);
+            const float reach = std::hypot(point.x - center.x, point.y - center.y);
+            if (reach >= minDistance && reach <= maxDistance) {
+                spots.push_back({point, distance});
+            }
+        }
+        return spots;
     }
 
     std::optional<RestDestination> TravelNavigation::FindRestDestination(const RestReachability& area,
@@ -357,7 +375,7 @@ namespace Wayfarer
     }
 
     std::optional<RE::NiPoint3> TravelNavigation::Trace(RE::NiPoint3 origin, Vec2 goal,
-                                                        std::optional<float> stepHeight) const
+                                                        std::optional<float> stepHeight, bool exact) const
     {
 
         auto originLocation = start;
@@ -403,7 +421,8 @@ namespace Wayfarer
             return triangle;
         };
         const auto result =
-            stepHeight
+            exact ? TraceGroundExact({origin.x, origin.y, origin.z}, goal, key(*originLocation), query)
+            : stepHeight
                 ? TraceGroundStep({origin.x, origin.y, origin.z}, {goal.x, goal.y, *stepHeight},
                                   key(*originLocation), query)
                 : TraceGroundCorridor({origin.x, origin.y, origin.z}, goal, key(*originLocation), query);
@@ -415,6 +434,35 @@ namespace Wayfarer
     {
 
         return Trace(origin, {goal.x, goal.y}, goal.z);
+    }
+
+    std::optional<RE::NiPoint3> TravelNavigation::LandingPoint(RE::NiPoint3 origin, RE::NiPoint3 goal) const
+    {
+        return Trace(origin, {goal.x, goal.y}, {}, true);
+    }
+
+    std::optional<RE::NiPoint3> TravelNavigation::GroundAt(RE::NiPoint3 p, float maxHeight) const
+    {
+        const auto location = Find(p, maxHeight);
+        const auto vertices = location ? Vertices(*location) : std::nullopt;
+        const auto weights = vertices ? GroundWeights({p.x, p.y, p.z}, *vertices) : std::nullopt;
+        if (!weights) {
+            return std::nullopt;
+        }
+        return RE::NiPoint3{p.x, p.y,
+                            (*weights)[0] * (*vertices)[0].z + (*weights)[1] * (*vertices)[1].z +
+                                (*weights)[2] * (*vertices)[2].z};
+    }
+
+    std::vector<LandingCandidate> TravelNavigation::LandingSpots(RE::NiPoint3 origin, float minDistance,
+                                                                 float maxDistance) const
+    {
+        std::vector<LandingCandidate> result;
+        for (const auto& spot :
+             RestSpots(RestArea(origin, origin, maxDistance, 512), origin, minDistance, maxDistance)) {
+            result.push_back({spot.point, spot.routeLength});
+        }
+        return result;
     }
 
     std::optional<RE::NiPoint3> TravelNavigation::RestPoint(RE::NiPoint3 p) const

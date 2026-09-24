@@ -63,6 +63,33 @@ namespace Wayfarer::Engine
 #endif
     }
 
+    // Orientation of a placed reference, such as the ground seat, without an actor's turn.
+    inline void SetReferenceAngle(RE::TESObjectREFR& reference, const RE::NiPoint3& angle)
+    {
+#ifdef WAYFARER_MODERN_COMMONLIB
+        reference.SetAngle(angle);
+#else
+        using Function = void (*)(RE::TESObjectREFR*, const RE::NiPoint3&);
+        static REL::Relocation<Function> setAngle{RELOCATION_ID(19359, 19786)};
+        setAngle(&reference, angle);
+#endif
+    }
+
+    // Acquisition only: set the reference orientation, rather than asking the
+    // actor's movement controller to turn toward a heading. Preserve pitch/roll.
+    inline void SetFacingImmediate(RE::Actor& actor, float yaw)
+    {
+        auto angle = actor.GetAngle();
+        angle.z = yaw;
+#ifdef WAYFARER_MODERN_COMMONLIB
+        actor.SetAngle(angle);
+#else
+        using Function = void (*)(RE::TESObjectREFR*, const RE::NiPoint3&);
+        static REL::Relocation<Function> setAngle{RELOCATION_ID(19359, 19786)};
+        setAngle(&actor, angle);
+#endif
+    }
+
     inline bool IsDialogueTransition(const RE::MenuTopicManager& topics)
     {
 #ifdef WAYFARER_MODERN_COMMONLIB

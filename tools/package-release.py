@@ -73,6 +73,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--vcpkg-root', type=Path, default=Path('X:/vcpkg'))
     parser.add_argument('--output-dir', type=Path, default=root / 'release')
+    parser.add_argument('--dll', type=Path, default=root / 'build/modern/bin/Release/Wayfarer.dll')
     args = parser.parse_args()
     package = root / 'package'
     version = re.search(r'project\(Wayfarer VERSION ([0-9.]+)', (root / 'CMakeLists.txt').read_text()).group(1)
@@ -84,8 +85,9 @@ def main():
     assert not any(p.exists() for p in (binary_zip, source_zip, gesture_zip)), 'Release archives already exist'
     verify_patch(package / 'Nemesis_Engine/mod/gpma/0_master')
     subprocess.run([sys.executable, str(root / 'tools/verify-package.py'), str(package), '--public'], check=True)
-    dll = root / 'build/modern/bin/Release/Wayfarer.dll'
+    dll = args.dll.resolve()
     verify_dll(dll.read_bytes(), version)
+    assert b'Post-victory reactions are shelved in this release' in dll.read_bytes(), 'Use the release DLL with post-victory disabled'
 
     files = {}
     for folder in ('Interface', 'Scripts', 'SKSE', 'ThirdParty', 'meshes', 'Nemesis_Engine', 'SEQ'):
@@ -102,13 +104,25 @@ def main():
         'GESTURES.md': 'gestures.md', 'CHANGELOG.md': f'changes-{version}.md',
         'RELEASE-VALIDATION.md': f'validation-{version}.md',
     }.items():
-        files[output] = root / 'docs' / document
+        # These documents move from docs/ to the archive root. Keep their local
+        # Markdown links pointing at the corresponding packaged documentation.
+        contents = (root / 'docs' / document).read_text(encoding='utf-8')
+        contents = re.sub(r'\]\((?!https?://|#|docs/)([A-Za-z0-9_.-]+\.md(?:#[^)]*)?)\)',
+                          r'](docs/\1)', contents)
+        files[output] = contents.encode('utf-8')
     for name in ('build.md', 'publish.md', 'gog.md', 'hotkeys.md', 'package-control.md',
-                 'party-orders-utilities.md', 'custom-followers.md', 'victory.md', 'testing.md', 'api-guide.md',
-                 'animation-hotfix-audit.md', 'reactions-pathing-review.md', 'actor-routes-victory-r5.md',
+                 'party-orders-utilities.md', 'custom-followers.md', 'testing.md', 'api-guide.md',
+                 'release.md', 'usage.md', 'hand-holding.md', 'gestures.md',
+                 f'changes-{version}.md', f'validation-{version}.md',
+                 'rest-dialogue.md', 'area-activities.md', 'rest-dispersal.md',
+                 'loot-scouting.md', 'teleport.md', 'menu-background.md',
+                 'menu-overhead-2026-09-24.md', 'classic-hand-holding.md',
+                 'classic-ground-r3.md', 'tether-latency-r2.md', 'tether-direct-r4.md',
+                 'animation-hotfix-audit.md',
                  'bridge-startup-r6.md', 'control-handoff-r7.md', 'reset-cadence-r8.md',
                  'r3-movement-r9.md', 'baseline-0.2.1.md'):
         files['docs/' + name] = root / 'docs' / name
+    files['rest-dialogue.md'] = root / 'docs/rest-dialogue.md'
 
     files['ClaspGenerator/build-tether-clasp-clips.py'] = root / 'tools/build-tether-clasp-clips.py'
     files['ClaspGenerator/clasp-rotations.json'] = root / 'assets/clasp-rotations.json'
@@ -147,7 +161,7 @@ def main():
                     # the current release label. Existing 0.2.0 clips remain valid.
                     assert condition['requiredVersion'] == '0.2.0.0', name
     source = {}
-    extensions = {'.cpp', '.h', '.py', '.ps1', '.md', '.txt', '.json', '.toml', '.cmake', '.in', '.svg', '.ini', '.psc'}
+    extensions = {'.c', '.cpp', '.h', '.py', '.ps1', '.md', '.txt', '.json', '.toml', '.cmake', '.in', '.svg', '.png', '.ini', '.psc'}
     for folder in ('src', 'include', 'tests', 'tools', 'docs', 'cmake', 'LICENSES', 'third_party', 'assets'):
         for path in (root / folder).rglob('*'):
             if path.is_file() and '__pycache__' not in path.parts and (path.suffix in extensions or path.name in {'LICENSE', 'COPYING', 'EXCEPTIONS'}):
@@ -184,11 +198,12 @@ def main():
                 assert value.is_file(), value
     files, gestures = split_gestures(files)
     gestures['GESTURES.md'] = root / 'docs/gestures.md'
-    for name in ('LICENSE', 'LICENSING.md', 'EXCEPTIONS.md'):
+    for name in ('LICENSE', 'LICENSING.md', 'EXCEPTIONS.md', 'LICENSES/Wayfarer-MIT.txt'):
         gestures[name] = root / name
     for path in (package / 'ThirdParty').rglob('*'):
         if path.is_file():
-            gestures[path.relative_to(package).as_posix()] = path
+            name = path.relative_to(package).as_posix()
+            gestures[name] = files.get(name, path)
     for mapping in (files, gestures):
         mapping['manifest.sha256'] = ''.join(
             f'{hashlib.sha256(payload(value)).hexdigest()}  {name}\n'

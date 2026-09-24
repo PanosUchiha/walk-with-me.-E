@@ -82,8 +82,7 @@ namespace Wayfarer
         data.conversationAwareness =
             ini.GetBoolValue("PartyLife", "bConversationAwareness", data.conversationAwareness);
         data.walkingBanter = ini.GetBoolValue("PartyLife", "bWalkingBanter", data.walkingBanter);
-        data.victoryCelebrations =
-            ini.GetBoolValue("PartyLife", "bVictoryCelebrations", data.victoryCelebrations);
+        data.victoryCelebrations = false;
         data.personalities = ini.GetBoolValue("PartyLife", "bPersonalities", data.personalities);
         data.lookouts = ini.GetBoolValue("PartyLife", "bLookouts", data.lookouts);
         data.conversationClearance =
@@ -123,6 +122,8 @@ namespace Wayfarer
         data.enforceCustomFollowers =
             ini.GetBoolValue("Compatibility", "bEnforceCustomFollowers", data.enforceCustomFollowers);
         data.showOrderHUD = ini.GetBoolValue("Interface", "bShowOrderHUD", data.showOrderHUD);
+        data.restDialogueIcons = ini.GetBoolValue("Interface", "bRestDialogueIcons", data.restDialogueIcons);
+        data.animateChatIcons = ini.GetBoolValue("Interface", "bAnimateChatIcons", data.animateChatIcons);
         data.hudPanel = ini.GetBoolValue("Interface", "bHUDPanel", data.hudPanel);
         data.commandGestures = ini.GetBoolValue("Interface", "bCommandGestures", data.commandGestures);
         data.pointingSignal = ini.GetBoolValue("Interface", "bPointingSignal", data.pointingSignal);
@@ -140,6 +141,9 @@ namespace Wayfarer
         data.hudScale = number("Interface", "fHUDScale", data.hudScale, 0.55F, 1.3F);
         auto& hands = data.handHolding;
         hands.enabled = ini.GetBoolValue("HandHolding", "bEnabled", hands.enabled);
+        hands.method = Lower(Trim(ini.GetValue("HandHolding", "sMethod", "classic"))) == "tether"
+                           ? HandHolding::Method::Tether
+                           : HandHolding::Method::Classic;
         hands.partner = Lower(Trim(ini.GetValue("HandHolding", "sPartner", "")));
         hands.partnerName = ini.GetValue("HandHolding", "sPartnerName", "");
         hands.delay = number("HandHolding", "fLeadInSeconds", hands.delay, .5F, 10.0F);
@@ -190,6 +194,23 @@ namespace Wayfarer
                                           300.0F, data.releaseDistance - 100.0F);
         data.distantCatchupEnd = number("Movement", "fDistantCatchupEnd", data.distantCatchupEnd, 150.0F,
                                         data.distantCatchupStart - 100.0F);
+        auto& loot = data.loot;
+        loot.enabled = ini.GetBoolValue("Loot", "bEnabled", loot.enabled);
+        loot.searchRadius = number("Loot", "fSearchRadius", loot.searchRadius, 300.0F, 2500.0F);
+        // Companions farther than fReleaseDistance leave WWM control, so give up before that.
+        loot.leaveDistance = number("Loot", "fLeaveDistance", loot.leaveDistance, 600.0F,
+                                    std::max(600.0F, data.releaseDistance - 100.0F));
+        loot.valuableGold = std::clamp(
+            static_cast<int>(ini.GetLongValue("Loot", "iValuableGold", loot.valuableGold)), 1, 100000);
+        loot.searchSeconds = number("Loot", "fSearchSeconds", loot.searchSeconds, 5.0F, 30.0F);
+        loot.areaDistance = number("Loot", "fAreaDistance", loot.areaDistance, 800.0F, 6000.0F);
+        loot.containers = ini.GetBoolValue("Loot", "bContainers", loot.containers);
+        loot.bodies = ini.GetBoolValue("Loot", "bBodies", loot.bodies);
+        loot.looseItems = ini.GetBoolValue("Loot", "bLooseItems", loot.looseItems);
+        loot.icons = ini.GetBoolValue("Loot", "bIcons", loot.icons);
+        loot.inhabitedInteriors = ini.GetBoolValue("Loot", "bInhabitedInteriors", loot.inhabitedInteriors);
+        loot.finder = Lower(Trim(ini.GetValue("Loot", "sFinder", "")));
+        loot.finderName = ini.GetValue("Loot", "sFinderName", "");
         auto& sandbox = data.sandbox;
         sandbox.automatic = ini.GetBoolValue("Sandbox", "bAutomatic", sandbox.automatic);
         sandbox.startRadius = number("Sandbox", "fStartRadius", sandbox.startRadius, 40.0F,
@@ -211,6 +232,7 @@ namespace Wayfarer
         sandbox.meals = ini.GetBoolValue("Sandbox", "bMeals", sandbox.meals);
         sandbox.reading = ini.GetBoolValue("Sandbox", "bReading", sandbox.reading);
         sandbox.stretching = ini.GetBoolValue("Sandbox", "bStretching", sandbox.stretching);
+        sandbox.areaActivities = ini.GetBoolValue("Sandbox", "bAreaActivities", sandbox.areaActivities);
         sandbox.social = ini.GetBoolValue("Sandbox", "bSocialIdles", sandbox.social);
 
         LoadHotkeys(ini, data);
@@ -251,7 +273,7 @@ namespace Wayfarer
         ini.SetLongValue("General", "iEnrollmentVersion", 2);
         ini.SetBoolValue("Compatibility", "bEnforceNFF", value.enforceNFF);
         ini.SetBoolValue("PartyLife", "bWalkingBanter", value.walkingBanter);
-        ini.SetBoolValue("PartyLife", "bVictoryCelebrations", value.victoryCelebrations);
+        ini.Delete("PartyLife", "bVictoryCelebrations");
         ini.SetBoolValue("Compatibility", "bEnforceCustomFollowers", value.enforceCustomFollowers);
         std::vector<std::string> excluded(value.excludedPlugins.begin(), value.excludedPlugins.end());
         std::sort(excluded.begin(), excluded.end());
@@ -265,12 +287,16 @@ namespace Wayfarer
         ini.SetValue("Compatibility", "sExcludedPlugins", excludedList.c_str());
         ini.SetBoolValue("Safety", "bDisableIndoors", value.disableIndoors);
         ini.SetBoolValue("Interface", "bShowOrderHUD", value.showOrderHUD);
+        ini.SetBoolValue("Interface", "bRestDialogueIcons", value.restDialogueIcons);
+        ini.SetBoolValue("Interface", "bAnimateChatIcons", value.animateChatIcons);
         ini.SetBoolValue("Interface", "bHUDPanel", value.hudPanel);
         ini.SetBoolValue("Interface", "bCommandGestures", value.commandGestures);
         ini.SetBoolValue("Interface", "bPointingSignal", value.pointingSignal);
         ini.SetBoolValue("Interface", "bCompanionSignal", value.companionSignal);
         ini.SetBoolValue("Interface", "bGestureAwareness", value.gestureAwareness);
         ini.SetBoolValue("HandHolding", "bEnabled", value.handHolding.enabled);
+        ini.SetValue("HandHolding", "sMethod",
+                     value.handHolding.method == HandHolding::Method::Classic ? "classic" : "tether");
         ini.SetValue("HandHolding", "sPartner", value.handHolding.partner.c_str());
         ini.SetValue("HandHolding", "sPartnerName", value.handHolding.partnerName.c_str());
         ini.SetDoubleValue("HandHolding", "fLeadInSeconds", value.handHolding.delay);
@@ -328,7 +354,21 @@ namespace Wayfarer
         ini.SetBoolValue("Sandbox", "bMeals", value.sandbox.meals);
         ini.SetBoolValue("Sandbox", "bReading", value.sandbox.reading);
         ini.SetBoolValue("Sandbox", "bStretching", value.sandbox.stretching);
+        ini.SetBoolValue("Sandbox", "bAreaActivities", value.sandbox.areaActivities);
         ini.SetBoolValue("Sandbox", "bSocialIdles", value.sandbox.social);
+        ini.SetBoolValue("Loot", "bEnabled", value.loot.enabled);
+        ini.SetDoubleValue("Loot", "fSearchRadius", value.loot.searchRadius);
+        ini.SetDoubleValue("Loot", "fLeaveDistance", value.loot.leaveDistance);
+        ini.SetLongValue("Loot", "iValuableGold", value.loot.valuableGold);
+        ini.SetDoubleValue("Loot", "fSearchSeconds", value.loot.searchSeconds);
+        ini.SetDoubleValue("Loot", "fAreaDistance", value.loot.areaDistance);
+        ini.SetBoolValue("Loot", "bContainers", value.loot.containers);
+        ini.SetBoolValue("Loot", "bBodies", value.loot.bodies);
+        ini.SetBoolValue("Loot", "bLooseItems", value.loot.looseItems);
+        ini.SetBoolValue("Loot", "bIcons", value.loot.icons);
+        ini.SetBoolValue("Loot", "bInhabitedInteriors", value.loot.inhabitedInteriors);
+        ini.SetValue("Loot", "sFinder", value.loot.finder.c_str());
+        ini.SetValue("Loot", "sFinderName", value.loot.finderName.c_str());
         auto temporary = path;
         temporary += ".tmp";
         if (ini.SaveFile(temporary.string().c_str()) < 0 ||

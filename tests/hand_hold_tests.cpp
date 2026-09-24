@@ -223,6 +223,43 @@ int main()
         check(!ReadyAtHand(-40.0F * side, 0, side, 40), "contact cannot jump to the opposite hand");
     }
 
+    // Rumarin's six 22:56 Classic grips all released on the first idle travel
+    // update. Exercise the production fallback with the real ground tracers.
+    {
+        using namespace Wayfarer;
+        const GroundTriangle ground{{{{0, 0, 0}, {1000, 0, 200}, {0, 1000, 0}}}, {}};
+        bool loaded = true;
+        const GroundQuery query = [&](GroundKey key) -> std::optional<GroundTriangle> {
+            return loaded && key == 0 ? std::optional<GroundTriangle>{ground} : std::nullopt;
+        };
+        const GroundPoint actor{100, 100, 32}; // 12 units above the slope's ground.
+        int holds = 0;
+        auto resolve = [&](GroundPoint from, Vec2 goal, Vec2) {
+            return TraceGroundCorridor(from, goal, 0, query);
+        };
+        auto hold = [&](GroundPoint from) {
+            ++holds;
+            return TraceGroundStep(from, from, 0, query);
+        };
+        check(!resolve(actor, {actor.x, actor.y}, {0, 1}), "ordinary corridors reject zero-length routes");
+        for (int frame = 0; frame < 60; ++frame) {
+            const auto target = LocomotionTarget(actor, {0, 1}, LocomotionLead(0), resolve, hold);
+            check(
+                target && target->x == actor.x && target->y == actor.y &&
+                    std::abs(target->z - actor.z) < .001F,
+                "idle Classic remains on its validated ground without dropping the grip or changing height");
+        }
+        check(holds == 60, "each stopped update uses the grounded fallback");
+        const auto moving = LocomotionTarget(actor, {0, 1}, LocomotionLead(100), resolve, hold);
+        check(moving && moving->y > actor.y && holds == 60, "resuming travel selects a forward route again");
+        auto blocked = [](GroundPoint, Vec2, Vec2) -> std::optional<GroundPoint> { return {}; };
+        check(LocomotionTarget(actor, {0, 1}, LocomotionLead(100), blocked, hold).has_value(),
+              "blocked gait marker retains safe standing ground; attachment still checks actual movement");
+        loaded = false;
+        check(!LocomotionTarget(actor, {0, 1}, LocomotionLead(0), resolve, hold),
+              "missing ground still fails closed instead of retaining an invalid attachment");
+    }
+
     for (float speed : {106.0F, 280.0F, 450.0F}) {
         Wayfarer::TravelGoalState route;
         Wayfarer::TravelTuning travel;

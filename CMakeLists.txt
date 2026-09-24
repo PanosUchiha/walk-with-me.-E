@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Wayfarer VERSION 0.2.1 LANGUAGES CXX)
+project(Wayfarer VERSION 0.2.2 LANGUAGES CXX)
 if(PROJECT_VERSION_PATCH STREQUAL "")
     set(PROJECT_VERSION_PATCH 0)
 endif()
@@ -28,10 +28,12 @@ endif()
 find_path(SIMPLEINI_INCLUDE_DIRS "SimpleIni.h" REQUIRED)
 
 set(WAYFARER_SOURCES
+    third_party/zlib-puff/puff.c
     src/formation_controller.cpp
     src/dialogue_management.cpp
-    src/victory_celebration.cpp
-    src/victory_animation.cpp
+    src/rest_dialogue.cpp
+    src/loot_scout.cpp
+    src/victory_disabled.cpp
     src/tether_clasp.cpp
     third_party/OpenAnimationReplacer/OpenAnimationReplacerAPI-Conditions.cpp
     third_party/OpenAnimationReplacer/OpenAnimationReplacer-ConditionTypes.cpp
@@ -48,6 +50,8 @@ set(WAYFARER_SOURCES
     src/command_gesture.cpp
     src/gesture_head_tracking.cpp
     src/hand_holding_tether.cpp
+    src/hand_holding.cpp
+    src/hand_holding_dispatch.cpp
     src/havok_compatibility.cpp
     src/input_handler.cpp
     src/papyrus_bridge.cpp
@@ -56,6 +60,7 @@ set(WAYFARER_SOURCES
 )
 
 add_library(Wayfarer SHARED ${WAYFARER_SOURCES} ${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc)
+set_source_files_properties(third_party/zlib-puff/puff.c PROPERTIES LANGUAGE CXX SKIP_PRECOMPILE_HEADERS ON)
 target_compile_features(Wayfarer PRIVATE cxx_std_23)
 target_compile_definitions(Wayfarer PRIVATE SKYRIM _UNICODE WAYFARER_EXPORTS NOMINMAX WIN32_LEAN_AND_MEAN)
 if(WAYFARER_COMMONLIB_SOURCE)
@@ -63,7 +68,7 @@ if(WAYFARER_COMMONLIB_SOURCE)
 endif()
 target_include_directories(Wayfarer
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
-    PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated ${SIMPLEINI_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenAnimationReplacer
+    PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated ${SIMPLEINI_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenAnimationReplacer ${CMAKE_CURRENT_SOURCE_DIR}/third_party/zlib-puff
 )
 target_link_libraries(Wayfarer PRIVATE CommonLibSSE::CommonLibSSE)
 target_precompile_headers(Wayfarer PRIVATE include/precompiled.h)
@@ -80,6 +85,22 @@ set_target_properties(Wayfarer PROPERTIES
 )
 
 enable_testing()
+add_executable(WayfarerOverheadTests tests/overhead_icons_tests.cpp)
+target_compile_features(WayfarerOverheadTests PRIVATE cxx_std_20)
+target_include_directories(WayfarerOverheadTests PRIVATE include)
+add_test(NAME WayfarerOverhead COMMAND WayfarerOverheadTests)
+add_executable(WayfarerRestDialogueTests tests/rest_dialogue_tests.cpp third_party/zlib-puff/puff.c)
+target_compile_features(WayfarerRestDialogueTests PRIVATE cxx_std_20)
+target_include_directories(WayfarerRestDialogueTests PRIVATE include third_party/zlib-puff)
+add_test(NAME WayfarerRestDialogue COMMAND WayfarerRestDialogueTests)
+add_executable(WayfarerLootTests tests/loot_scout_tests.cpp)
+target_compile_features(WayfarerLootTests PRIVATE cxx_std_20)
+target_include_directories(WayfarerLootTests PRIVATE include)
+add_test(NAME WayfarerLoot COMMAND WayfarerLootTests)
+add_executable(WayfarerHandHoldingDispatchTests tests/hand_holding_dispatch_tests.cpp src/hand_holding_dispatch.cpp)
+target_compile_features(WayfarerHandHoldingDispatchTests PRIVATE cxx_std_20)
+target_include_directories(WayfarerHandHoldingDispatchTests PRIVATE tests/hand_holding_stubs include)
+add_test(NAME WayfarerHandHoldingDispatch COMMAND WayfarerHandHoldingDispatchTests)
 add_executable(WayfarerTetherTests tests/tether_handoff_tests.cpp src/travel_planner.cpp src/formation_math.cpp)
 target_compile_features(WayfarerTetherTests PRIVATE cxx_std_20)
 target_include_directories(WayfarerTetherTests PRIVATE include)
@@ -163,6 +184,11 @@ add_executable(WayfarerBehaviorTests tests/party_behavior_tests.cpp src/party_be
 target_compile_features(WayfarerBehaviorTests PRIVATE cxx_std_20)
 target_include_directories(WayfarerBehaviorTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME WayfarerBehavior COMMAND WayfarerBehaviorTests)
+
+add_executable(WayfarerAreaTests tests/area_activities_tests.cpp src/social_planner.cpp src/formation_math.cpp)
+target_compile_features(WayfarerAreaTests PRIVATE cxx_std_20)
+target_include_directories(WayfarerAreaTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME WayfarerArea COMMAND WayfarerAreaTests)
 
 add_executable(WayfarerRestNavigationTests tests/rest_navigation_tests.cpp src/formation_math.cpp)
 target_compile_features(WayfarerRestNavigationTests PRIVATE cxx_std_20)

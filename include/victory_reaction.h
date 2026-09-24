@@ -24,45 +24,44 @@ namespace Wayfarer::Victory
         bool armed{};
         bool shoulder{};
         float seconds{reactionSeconds};
+        unsigned customClip{}; // 1=shoulder, 2=victory, 3=arm stretch; 0=vanilla
     };
     constexpr std::uint32_t PartyVariation(std::uint32_t index, std::uint32_t sequence)
     {
-        // Reserve a shoulder slot first, then deal different reactions across
-        // the party. Rotate actor ordering per encounter at the call site.
-        return index + 3 + sequence * 4;
+        // Stable actor order; advance the four-clip rotation each encounter.
+        return index + sequence;
     }
     constexpr bool WaitForIdleOwnership(float elapsed)
     {
-        return elapsed < .5F;
+        return elapsed < .75F;
     }
-    constexpr bool RetryEarlyIdleLoss(float elapsed, unsigned attempts)
+    constexpr bool ReactionComplete(float elapsed, float duration, bool unsafe, bool equipmentChanged)
     {
-        return elapsed < 1.0F && attempts < 3;
+        return elapsed >= duration || unsafe || (equipmentChanged && !WaitForIdleOwnership(elapsed));
     }
+    constexpr bool SheatheSettled(float seconds) { return seconds >= .35F; }
     constexpr bool RequestsShoulder(std::uint32_t variation, bool available)
     {
-        return available && variation % 4 == 3;
+        return available && variation % 4 != 3;
     }
     constexpr IdleChoice ChooseIdle(Equipment equipment, std::uint32_t variation,
                                     bool shoulderAvailable = false)
     {
+        if (equipment != Equipment::Sheathed) return {};
         if (equipment == Equipment::Sheathed && RequestsShoulder(variation, shoulderAvailable)) {
-            return {0xD8731, "Shoulder recovery", false, true, shoulderSeconds};
+            switch (variation % 4) {
+            case 0: return {0xD8731, "Victory", false, true, 256.0F / 30.0F, 2};
+            case 1: return {0xD8731, "Arm stretch", false, true, 266.0F / 30.0F, 3};
+            default: return {0xD8731, "Shoulder recovery", false, true, shoulderSeconds, 1};
+            }
         }
         switch (equipment) {
         case Equipment::Sheathed:
         case Equipment::EmptyHands: {
-            constexpr IdleChoice applause[]{{0xD8731, "IdleApplaud3 (tavern applause)", false},
-                                            {0xD8730, "IdleApplaud2", false},
-                                            {0xD8733, "IdleApplaud5", false}};
-            switch (variation % 4) {
-            case 1:
-                return {0x977EC, "IdleWipeBrow (catch breath)", false, false, 2.6F};
-            case 2:
-                return {0x75C3D, "IdleExamine (check hands)", false, false, 6.3F};
-            default:
-                return applause[(variation / 4) % 3];
-            }
+            constexpr IdleChoice applause[]{{0xD8731, "IdleApplaud3 (tavern applause)", false, false, 7.133333F},
+                                            {0xD8730, "IdleApplaud2", false, false, 7.333333F},
+                                            {0xD8733, "IdleApplaud5", false, false, 6.333333F}};
+            return applause[(variation / 4) % 3];
         }
         case Equipment::Sword:
             return {0xF7C8C, "IdleCivilWarCheer (sword)", true};
@@ -80,7 +79,31 @@ namespace Wayfarer::Victory
     {
         return completed > queuedAt;
     }
-    constexpr float startWindowSeconds = 15.0F;
+    constexpr float startWindowSeconds = 10.0F;
+    constexpr bool StartExpired(float elapsed) { return elapsed > startWindowSeconds; }
+    struct PositionHold
+    {
+        std::int32_t ticket{};
+        bool requested{}, ready{}, released{};
+        bool Poll(std::int32_t token, std::int32_t status, bool started, float elapsed)
+        {
+            if (!requested || token != ticket) return false;
+            if (status == 2) { released = true; ready = false; }
+            if (released || (!started && StartExpired(elapsed))) return false;
+            if (status == 1) ready = true;
+            return true;
+        }
+    };
+    constexpr bool RetryUnobservedClip(bool observed, float playbackElapsed, float windowElapsed,
+                                       unsigned retries)
+    {
+        return !observed && playbackElapsed >= 1.0F &&
+               windowElapsed < startWindowSeconds && retries == 0;
+    }
+    constexpr bool NaturallySheathed(Equipment player, Equipment follower)
+    {
+        return player == Equipment::Sheathed && follower == Equipment::Sheathed;
+    }
     constexpr float retrySeconds = .5F;
 
     // A brief player movement must not discard reactions still waiting for

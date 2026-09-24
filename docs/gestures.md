@@ -1,4 +1,14 @@
-# Gesture setup
+# Command Gestures add-on: download and setup
+
+## Download
+
+For the 0.2.2 release, use the
+[Walk With Me Files page](https://www.nexusmods.com/skyrimspecialedition/mods/191283?tab=files).
+Download **Walk-With-Me-0.2.2-SE-AE.zip** from Main Files, and the matching
+**Walk-With-Me-0.2.2-Command-Gestures.zip** from Optional Files once the release
+has been uploaded. The Source ZIP is for developers, not a mod-manager install.
+The add-on requires the main mod. It supplies third-person command signals and a
+GPMA source extension, not the full GPMA mod or the optional hand-holding clips.
 
 Use your existing Nemesis or Pandora setup. Installing a behavior engine alone
 is not enough: regenerate after installing Walk With Me and its requirements.
@@ -13,8 +23,10 @@ gesture add-on only when you want command signals and have their requirements.
    and [Offset Movement Animation](https://www.nexusmods.com/skyrimspecialedition/mods/110408).
    Enable `FirstPersonInteractions.esp` and their required dependencies.
 2. Install Walk With Me and its matching Command Gestures add-on. Let the add-on win file conflicts against Offset Movement Animation
-   under `Nemesis_Engine/mod/gpma/0_master`. In MO2, put Walk With Me below GPMA
-   in the left pane. In Vortex, set the matching file conflict rule and deploy.
+   under `Nemesis_Engine/mod/gpma/0_master`. In MO2, put **Walk With Me - Command
+   Gestures** below **Offset Movement Animation** in the left pane (higher file
+   priority). This is a file conflict rule, not ESP load order. In Vortex, set the
+   add-on to load after Offset Movement Animation for those conflicts and deploy.
 3. Run your generator with the active mod list visible. For MO2, launch it through MO2.
    Keep your other required behavior patches enabled.
 
@@ -23,6 +35,14 @@ gesture add-on only when you want command signals and have their requirements.
 Tick **GP Offset Movement Animation**, update the engine, then launch generation.
 Enable the new output in your mod manager. See the
 [GPMA author's steps](https://www.nexusmods.com/skyrimspecialedition/mods/110408).
+
+Keep the generated output below the input animation/behavior mods in MO2 so its
+generated HKXs win. Use your existing output mod and modlist generation procedure;
+do not replace other patches with an output made for someone else's mod list.
+
+OAR has no Nemesis checkbox. It reads the installed animation replacement configs
+when Skyrim starts. There is no separate **Walk With Me** Nemesis checkbox either:
+the add-on extends **GP Offset Movement Animation**.
 
 ## Pandora
 
@@ -38,7 +58,8 @@ follow it while keeping this patch visible.
 
 ## In game
 
-Restart Skyrim. Enable **Command hand signal** in Walk With Me settings.
+Restart Skyrim through SKSE. In SKSE Menu Framework, open **Walk With Me > Controls
+> Wheel & signals** and enable **Command hand signal**.
 Enable Point for Lead and Invitation for Companion if you want those signals.
 Try an order in third person with weapons sheathed, then while walking.
 The legs should keep moving and the arms should return to rest.
@@ -89,12 +110,14 @@ line-based parser. A fresh Nemesis run and in-game playback still need validatio
 
 ## OAR errors and missing animations
 
-- `Walk With Me: Missing` or unknown `WWM_PostCombatShoulderRecovery`/clasp
-  conditions: check that both Wayfarer.dll and OpenAnimationReplacer.dll loaded.
-  Look in skse64.log, OpenAnimationReplacer.log and Walk With Me.log. The local
-  compatibility fix requests OAR interface V3, then V2 for older OAR builds; it
-  must be included in the rebuilt DLL. Expected log lines say the interface is
-  available and the shoulder/clasp conditions registered.
+- Unknown `WWM_PostCombatShoulderRecovery` or a **Walk With Me Victory** entry:
+  the 0.2.2 packages contain neither. Replace the old mod and disable old overlays
+  so their leftover victory configs are removed; do not edit their conditions to
+  force them on. Post-victory reactions are shelved.
+- `Walk With Me: Missing` or unknown clasp conditions: check that both Wayfarer.dll
+  and OpenAnimationReplacer.dll loaded. Look in skse64.log,
+  OpenAnimationReplacer.log and Walk With Me.log for OAR interface/registration
+  errors. The DLL requests interface V3, then V2 for older OAR builds.
 - Keep `requiredPlugin: "Walk With Me"`. This is the registered SKSE condition
   provider name, not `Wayfarer.esp`. Replacing it with the ESP filename breaks lookup.
 - Detection Plugin is a separate OAR extension. None of WWM's shipped configs
@@ -102,7 +125,7 @@ line-based parser. A fresh Nemesis run and in-game playback still need validatio
   installed animation pack requires it; it cannot register WWM's own conditions.
 - Signals need `FirstPersonInteractions.esp` enabled, OAR loaded, the gesture
   add-on installed and freshly generated GPMA behavior. In the OAR menu, look for
-  **Walk With Me Signals** and **Walk With Me Victory**. Signal conditions normally
+  **Walk With Me Signals**. Signal conditions normally
   evaluate false until the relevant order is issued.
 - No clasp animations in OAR: the public download does not include the
   game-derived clasp HKXs. Generate and install them as described in HAND_HOLDING.md.

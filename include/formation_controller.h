@@ -8,8 +8,10 @@
 #include "follower_catchup.h"
 #include "gesture_awareness.h"
 #include "individual_travel.h"
+#include "loot_scout.h"
 #include "menu_ui.h"
 #include "party_recall.h"
+#include "area_activities.h"
 #include "rest_activities.h"
 #include "rest_pose.h"
 #include "role_assignment.h"
@@ -31,6 +33,7 @@ namespace Wayfarer
         void Update(float a_deltaSeconds);
         void UpdateHandHolding(float dt);
         std::int32_t GetTetherHandoffTicket(std::uint32_t slot);
+        RE::BGSRefAlias* GetTetherHandoffAlias(std::uint32_t slot, std::int32_t ticket);
         void ConfirmTetherHandoff(std::uint32_t slot, std::int32_t ticket);
         void ResetForGameLoad();
 
@@ -43,6 +46,14 @@ namespace Wayfarer
         bool ApplyPreferences(const SettingsData& a_settings);
         void GiveOrder(PartyOrder a_order);
         [[nodiscard]] PartyView Snapshot();
+        [[nodiscard]] std::vector<RE::ActorHandle> RestDialogueActors() const;
+        struct LootScoutView
+        {
+            RE::ActorHandle actor;
+            bool valuable{};
+            float elapsed{};
+        };
+        [[nodiscard]] std::vector<LootScoutView> LootScouts() const;
         [[nodiscard]] std::vector<CommandGesture::FollowerBearing> GestureFollowerBearings(
             RE::PlayerCharacter& player);
         static void RegisterSerialization();
@@ -67,6 +78,7 @@ namespace Wayfarer
         void ReportSocialIdle(RE::Actor* actor, bool accepted);
         bool ShouldSuspendForDialogue();
         void ReportAliasSync(bool busy);
+        bool VictoryHoldState(RE::Actor* actor, std::int32_t ticket, std::int32_t state);
         RE::TESObjectREFR* GetRestSeat(std::uint32_t slot);
         RE::TESObjectREFR* GetGatherMarker(std::uint32_t slot);
         RE::TESIdleForm* ConsumeRestIdle(std::uint32_t slot);
@@ -109,7 +121,6 @@ namespace Wayfarer
             std::int32_t requestedHandTicket{};
             TravelGoalState goal;
             IndividualTravel individual;
-            FollowerCatchup catchup;
             ObstacleAvoidance avoidance;
             float speedScale{1.0F};
             bool distantCatchup{}, sandboxActive{};
@@ -117,7 +128,32 @@ namespace Wayfarer
             bool anchorSet{};
             bool restAnchorZSet{};
             float restAnchorZ{};
+            // The anchor marker is the native sandbox centre. It starts at the stopping
+            // point (restHome) and moves to wherever the companion walks, with a small
+            // radius, so native sandbox does not pull them straight back.
+            RE::NiPoint3 restHome{};
+            bool restHomeSet{};
+            bool focused{};
+            float focusRadius{};
+            AreaFeature feature{AreaFeature::None}; // The feature they are resting at.
+            RE::ObjectRefHandle featureRef;
+            RE::NiPoint3 featurePoint{};
+            AreaFeature pendingFeature{AreaFeature::None}; // The feature the current walk heads for.
+            RE::ObjectRefHandle pendingFeatureRef;
+            RE::NiPoint3 pendingFeaturePoint{};
+            bool poseTurn{};                  // Turning to face the feature before a pose.
+            RE::NiPoint3 poseFacePoint{};
+            bool socialLoop{};                // Holding a drink through a conversation.
+            float poseExitCheck{};
+            RE::ObjectRefHandle tableSeat;    // A chair at the inn table the party shares.
+            RE::FormID tableIdle{};           // A seated drink or meal waiting to play.
+            bool tableIdleActive{};
+            float tableIdleTime{};            // Until the mug is put down.
+            RE::FormID tableLook{};           // Who they turn to at the table: a companion or the server.
+            float tableLookTime{};
+            float tableRest{};                // After leaving the table, before coming back to it.
             bool socialHold{};
+            bool socialWalk{}; // Walking over to a conversation partner.
             int socialPhase{};
             int mealsState{-1};
             RestActivity activity{RestActivity::Stand};
@@ -133,6 +169,11 @@ namespace Wayfarer
             bool awarenessActive{}, awarenessWalking{}, awarenessTried{};
             float awarenessTime{};
             int awarenessPreviousPhase{};
+            Loot::Visit scout;
+            Loot::Target scoutTarget;
+            float scoutCooldown{}, scoutInspect{}, scoutIdleGap{};
+            bool scoutParked{}, scoutSawIdle{};
+            int scoutRetries{};
         };
 
         FormationController() = default;
@@ -141,12 +182,43 @@ namespace Wayfarer
         void InitializeVictoryEvents();
         void UpdateVictoryCelebration(RE::PlayerCharacter& player, float dt);
         void ResetVictoryCelebration(bool stopAnimations = true);
-        void UpdateVictoryCleanup();
+        void UpdateVictoryCleanup(float dt);
         std::string VictoryActorRejection(RE::Actor& actor, RE::PlayerCharacter& player, bool starting) const;
         void UpdateRestRecovery(ManagedFollower& follower, RE::Actor& actor, RE::TESObjectREFR& anchor,
                                 float dt);
         std::optional<RE::NiPoint3> FindRestActivity(ManagedFollower& follower, RE::Actor& actor,
                                                      RE::TESObjectREFR& anchor);
+        std::optional<RE::NiPoint3> FindRestSpot(ManagedFollower& follower, RE::Actor& actor,
+                                                 RE::TESObjectREFR& anchor, float distance);
+        [[nodiscard]] bool RestSpotCrowded(RE::FormID self, RE::NiPoint3 point, float clearance) const;
+        void BeginRestWalk(ManagedFollower& follower, float budget = 20);
+        void FocusRest(ManagedFollower& follower, RE::Actor& actor, RE::TESObjectREFR& anchor, float radius);
+        void ClearRestAnchor(ManagedFollower& follower);
+        [[nodiscard]] static RE::NiPoint3 RestCenter(const ManagedFollower& follower,
+                                                     const RE::TESObjectREFR& anchor);
+        [[nodiscard]] int FeatureUsers(RE::FormID self, RE::FormID feature) const;
+        void BeginRestPose(ManagedFollower& follower, RE::Actor& actor, int kind, AreaFeature at);
+        // The inn table: one companion sits, the others join, a server is called over.
+        struct TavernTable
+        {
+            RE::FormID host{}, space{}, caller{};
+            RE::NiPoint3 center{};
+            float emptyTime{}, workerTime{};
+            TableBeats beats;
+            RE::ActorHandle worker;
+            RE::ObjectRefHandle workerMark;
+            void Reset() { *this = {}; }
+        } table;
+        bool bardPerforming{};
+        void UpdateTavernTable(RE::PlayerCharacter& player, float dt);
+        void UpdateBardApplause(RE::PlayerCharacter& player);
+        void DissolveTable(const char* reason);
+        void StartTableDrink(ManagedFollower& follower, RE::Actor& actor, bool meal);
+        bool CallTableWorker(const std::vector<RE::FormID>& seated);
+        [[nodiscard]] RE::TESObjectREFR* FreeTableChair(RE::Actor& actor, RE::NiPoint3 center) const;
+        [[nodiscard]] RE::TESObjectREFR* SeatFor(ManagedFollower& follower);
+        bool StartSocialWalk();
+        void EndSocialWalk(ManagedFollower& follower, bool cancelPair);
         RE::TESObjectREFR* PrepareAuxMarker(ManagedFollower& follower, RE::Actor& actor, RE::NiPoint3 point,
                                             bool move = false);
         void UpdateConversationAwareness(RE::PlayerCharacter& player, float dt);
@@ -155,13 +227,51 @@ namespace Wayfarer
         void UpdateTravelRoles(RE::PlayerCharacter& player, float dt);
         void UpdateTravelBanter(RE::PlayerCharacter& player, float dt);
         void UpdateBanterMotion(RE::PlayerCharacter& player);
-        void UpdateFollowerCatchup(RE::PlayerCharacter& player, float dt);
+        [[nodiscard]] bool LootScoutPermitted() const;
+        [[nodiscard]] bool HasLootScouts() const;
+        void UpdateLootScouts(RE::PlayerCharacter& player, float dt);
+        void StartLootScout(RE::PlayerCharacter& player);
+        bool DriveLootScout(ManagedFollower& follower, RE::Actor& actor, RE::PlayerCharacter& player,
+                            bool retarget);
+        void EndLootScout(ManagedFollower& follower, RE::Actor* actor, Loot::End reason);
+        void ForgetLootArea();
+        std::unordered_set<RE::FormID> lootSeen;
+        std::unordered_map<RE::FormID, float> lootBackoff;
+        std::unordered_map<RE::FormID, Loot::Contents> lootContents; // Read once per area.
+        struct LootRouteMemo
+        {
+            Loot::Route route;
+            float until{};
+        };
+        std::unordered_map<RE::FormID, LootRouteMemo> lootRoutes; // Navmesh answers, briefly reused.
+        Loot::Survey lootSurvey;
+        Loot::Area lootArea;
+        RE::FormID lootAreaSpace{};
+        float lootScanTimer{}, lootClock{};
+        bool lootInhabited{};
+        std::vector<RE::Actor*> RecallRoster() const;
         std::vector<RE::Actor*> RecallCandidates() const;
         const char* RecallPlayerRejection(RE::PlayerCharacter& player) const;
-        bool RecallActorAllowed(RE::Actor& actor) const;
+        const char* RecallActorRejection(RE::Actor& actor, bool automatic) const;
         void RecallParty(RE::PlayerCharacter& player);
-        std::optional<RE::NiPoint3> RecallLanding(RE::PlayerCharacter& player, RE::FormID id, int slot,
-                                                  const std::vector<RE::NiPoint3>& reserved = {}) const;
+        struct Landing
+        {
+            RE::NiPoint3 point;
+            const char* source{};
+        };
+        // Never empty for a player standing in the world: the last tier is beside the player.
+        Landing FindLanding(RE::PlayerCharacter& player, RE::FormID id, int index,
+                            const std::vector<RE::NiPoint3>& reserved) const;
+        void TeleportCompanion(RE::Actor& actor, RE::NiPoint3 landing, RE::PlayerCharacter& player);
+        const char* CatchupPlayerRejection(RE::PlayerCharacter& player) const;
+        void UpdateTeleportCatchup(RE::PlayerCharacter& player, float dt);
+        void RecordPlayerTrail(RE::PlayerCharacter& player);
+        static RE::NiPoint3 PlayerGround(RE::PlayerCharacter& player);
+        static std::uint64_t TravelSpaceKey(RE::PlayerCharacter& player);
+        std::unordered_map<RE::FormID, FollowerCatchup> catchups;
+        std::unordered_map<RE::FormID, std::string> catchupHolds;
+        PlayerTrail playerTrail;
+        float catchupTimer{};
         PartyRecallRequest recallRequest;
         CompanionPushRequest companionPush;
         const char* CompanionPushRejection(RE::Actor& actor) const;
@@ -190,7 +300,8 @@ namespace Wayfarer
         void SetPoseFlag(int slot, int kind);
         void UpdateRestPose(ManagedFollower& follower, RE::Actor& actor, float dt);
         void EndRestPose(ManagedFollower& follower, RE::Actor* actor);
-        RE::TESObjectREFR* EnsureRestSeat(ManagedFollower& follower, RE::Actor& actor, RE::NiPoint3 point);
+        RE::TESObjectREFR* EnsureRestSeat(ManagedFollower& follower, RE::Actor& actor, RE::NiPoint3 point,
+                                          float yaw);
         bool IsRelaxing() const { return mode == FormationMode::kSandbox; }
         bool SocialEligible(RE::Actor& actor) const;
         void UpdateSocial(float dt);
@@ -199,7 +310,7 @@ namespace Wayfarer
         void WakeQuest();
         [[nodiscard]] static RE::BGSRefAlias* GetRefAlias(RE::TESQuest* a_quest, std::uint32_t a_aliasID);
         void ReleaseTravel(ManagedFollower& a_follower, RE::Actor* a_actor, bool tetherHandoff = false);
-        void ReleaseAll();
+        void ReleaseAll(bool keepLootScouts = false);
         void RemoveManaged(RE::FormID a_formID);
         void LogDiagnostic(RE::FormID a_formID, const char* a_name, const char* a_reason);
         void LogGlobalDiagnostic(const char* a_reason);
@@ -217,21 +328,27 @@ namespace Wayfarer
             float delay{}, elapsed{};
             float duration{Victory::reactionSeconds};
             bool started{};
-            bool armedPhaseDone{};
             bool shoulderSelected{}, clipChecked{};
             unsigned startAttempts{};
+            unsigned playbackRetries{};
+            float windowElapsed{};
+            Victory::PositionHold hold;
             std::uint32_t variation{};
             float nextAttempt{};
+            float sheathSettled{}, cleanupElapsed{};
+            bool cleanupStopped{}, combatRestore{};
             std::uint64_t queuedAtAliasSync{};
             Victory::Equipment equipment{Victory::Equipment::Unsupported};
             std::string lastReason;
         };
         std::vector<VictoryReaction> victoryReactions;
+        void QueueVictoryCleanup(VictoryReaction reaction, bool combat = false);
         std::vector<VictoryReaction> victoryCleanup;
         bool aliasSyncBusy{true};
         std::uint64_t completedAliasSyncs{};
         float victoryScanTimer{};
         std::uint32_t victorySequence{};
+        bool victoryVoiceRequested{};
         PartyOrder order{PartyOrder::kTravel};
         std::uint64_t generation{};
         std::unordered_map<RE::FormID, int> manualRegistrations;

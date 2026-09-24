@@ -7,6 +7,8 @@
 #include "hud_notice.h"
 #include "order_visuals.h"
 #include "order_wheel.h"
+#include "overhead_icons.h"
+#include "rest_dialogue.h"
 #include <functional>
 #include <optional>
 
@@ -223,23 +225,28 @@ namespace Wayfarer::Menu
 
         void Help(const char* text)
         {
-            if (Im::IsItemHovered()) {
-                Im::SetTooltip("%s", text);
+            if (Im::IsItemHovered(Im::ImGuiHoveredFlags_AllowWhenDisabled)) {
+                Im::BeginTooltip();
+                Im::PushTextWrapPos(E(30));
+                Im::TextUnformatted(text);
+                Im::PopTextWrapPos();
+                Im::EndTooltip();
             }
         }
 
         void Icon(Im::ImDrawList* draw, V c, float r, int type, Im::ImU32 color)
         {
-            static const std::array<std::string, 8> glyphs = [] {
-                std::array<std::string, 8> result;
-                constexpr unsigned codes[]{0xf14e, 0xf024, 0xf132, 0xf06d, 0xf554, 0xf0c0, 0xf084, 0xf007};
-                for (int i = 0; i < 8; ++i) {
+            static const std::array<std::string, 9> glyphs = [] {
+                std::array<std::string, 9> result;
+                constexpr unsigned codes[]{0xf14e, 0xf024, 0xf132, 0xf06d, 0xf018,
+                                           0xf0c0, 0xf084, 0xf007, 0xf219};
+                for (int i = 0; i < 9; ++i) {
                     result[i] = FontAwesome::UnicodeToUtf8(codes[i]);
                 }
                 return result;
             }();
             FontAwesome::PushSolid();
-            const auto& glyph = glyphs[std::clamp(type, 0, 7)];
+            const auto& glyph = glyphs[std::clamp(type, 0, 8)];
             const float size = r * 2.0F;
             const auto bounds = Im::CalcTextSize(glyph.c_str());
             const float ratio = size / Im::GetFontSize();
@@ -288,6 +295,64 @@ namespace Wayfarer::Menu
                 Im::PopStyleColor(13);
             }
         };
+        void SettingsBackground()
+        {
+            static const auto texture = MF::LoadTexture("Data/Interface/WalkWithMe/menu-background.png");
+            if (!texture) {
+                return;
+            }
+            // Window coordinates keep the artwork pinned while the settings content scrolls.
+            // Submit before widgets so the image never draws over controls or captures input.
+            const auto origin = Im::GetWindowPos();
+            const auto window = Im::GetWindowSize();
+            const float inset = E(.35F);
+            const float availableWidth = window.x - 2 * inset - Im::GetStyle()->ScrollbarSize;
+            const float availableHeight = window.y - 2 * inset;
+            if (availableWidth <= 0 || availableHeight <= 0) {
+                return;
+            }
+            constexpr float aspect = 742.0F / 465.0F; // Supplied WalkWithME.png, kept unmodified.
+            const float width = std::min(availableWidth * .50F, availableHeight * .45F * aspect);
+            const V end{origin.x + window.x - inset - Im::GetStyle()->ScrollbarSize,
+                        origin.y + window.y - inset};
+            Draw::AddImage(Im::GetWindowDrawList(), texture, {end.x - width, end.y - width / aspect}, end,
+                           {0, 0}, {1, 1}, IM_COL32(255, 255, 255, 51));
+        }
+        // SceneDirector's compact density, with Walk With Me's ivory/gold palette.
+        // Restore the child window's scale before ending it; no style leaks to another mod.
+        struct SettingsPage
+        {
+            Theme theme;
+            explicit SettingsPage(const char* id)
+            {
+                Im::BeginChild(id, {0, 0});
+                Im::SetWindowFontScale(.85F);
+                Im::PushStyleVar(Im::ImGuiStyleVar_ItemSpacing, V{6, 3});
+                Im::PushStyleVar(Im::ImGuiStyleVar_FramePadding, V{4, 2});
+                Im::PushStyleVar(Im::ImGuiStyleVar_CellPadding, V{6, 2});
+                SettingsBackground();
+            }
+            ~SettingsPage()
+            {
+                Im::PopStyleVar(3);
+                Im::SetWindowFontScale(1);
+                Im::EndChild();
+            }
+            SettingsPage(const SettingsPage&) = delete;
+            SettingsPage& operator=(const SettingsPage&) = delete;
+        };
+        bool Group(const char* title, int icon, bool open = true)
+        {
+            Space();
+            const auto p = Im::GetCursorScreenPos();
+            Icon(Im::GetWindowDrawList(), {p.x + E(.45F), p.y + E(.6F)}, E(.38F), icon, gold);
+            Im::Dummy({E(1.35F), E(1.2F)});
+            Im::SameLine(0, 0);
+            Im::PushStyleColor(Im::ImGuiCol_Text, gold);
+            const bool expanded = Im::CollapsingHeader(title, open ? Im::ImGuiTreeNodeFlags_DefaultOpen : 0);
+            Im::PopStyleColor();
+            return expanded;
+        }
         std::string KeyName(std::uint32_t code)
         {
             if (code == unbound) {
@@ -331,19 +396,17 @@ namespace Wayfarer::Menu
             }
         }
 
-        void Header(const PartyView& view, const char*)
+        void Header(const PartyView& view, const char* title)
         {
-            Label("WALK WITH ME");
-            bool enabled = draft.enabled;
-            if (Im::Checkbox("Enabled", &enabled)) {
-                draft.enabled = enabled;
-                dirty = true;
-            }
-            Im::SameLine();
-            Im::TextDisabled(
-                "%s  |  %zu / %d companions", view.state.c_str(),
-                std::count_if(view.party.begin(), view.party.end(), [](const auto& p) { return p.managed; }),
-                view.settings.maxFollowers);
+            Im::PushStyleColor(Im::ImGuiCol_Text, gold);
+            Im::Text("WALK WITH ME / %s", title);
+            Im::PopStyleColor();
+            Im::SameLine(0, E(.65F));
+            Im::TextDisabled("%zu companions", std::count_if(view.party.begin(), view.party.end(),
+                                                             [](const auto& p) { return p.managed; }));
+            Im::PushStyleColor(Im::ImGuiCol_Separator, gold);
+            Im::Separator();
+            Im::PopStyleColor();
             Space();
         }
         void SaveChanges()
@@ -412,10 +475,18 @@ namespace Wayfarer::Menu
             if (Im::BeginTable("orders", 3, Im::ImGuiTableFlags_SizingStretchSame)) {
                 for (int i = 0; i < Wheel::count; ++i) {
                     Im::TableNextColumn();
+                    const bool selected = view.mode == profileModes[i];
+                    if (selected) {
+                        Im::PushStyleColor(Im::ImGuiCol_Text, gold);
+                        Im::PushStyleColor(Im::ImGuiCol_Button, IM_COL32(67, 62, 49, 230));
+                    }
                     if (Im::Button(profileNames[i], {-1, 0})) {
                         IssueStyle(profileModes[i]);
                     }
                     Help(styleHints[i]);
+                    if (selected) {
+                        Im::PopStyleColor(2);
+                    }
                 }
                 Im::EndTable();
             }
@@ -772,59 +843,13 @@ namespace Wayfarer::Menu
                 Im::EndTable();
             }
         }
-        void __stdcall RenderParty()
-        {
-            const auto view = Read();
-            Prepare(view);
-            Theme theme;
-            Im::BeginChild("WalkWithMeParty", {0, 0});
-            Im::SetWindowFontScale(.70F);
-            Header(view, "");
-            OrderCards(view);
-            Label("TRAVEL STYLE", 5);
-            for (int i = 0; i < Wheel::count; ++i) {
-                if (i % 3) {
-                    Im::SameLine();
-                }
-                if (Im::RadioButton(profileNames[i], view.mode == profileModes[i])) {
-                    const auto chosen = profileModes[i];
-                    Queue([chosen](auto& c) { c.SetMode(chosen); });
-                }
-            }
-            Note("Companions choose their own space as you travel.");
-            Roster(view);
-            Im::BeginDisabled(!view.inGame);
-            if (Im::Button("Companion control...")) {
-                OpenPackageControl(view);
-            }
-            Help("Open a separate window to explicitly manage a nearby custom companion's travel or release "
-                 "a previous import.");
-            Im::EndDisabled();
-            Label("PARTY", 5);
-            Im::SetNextItemWidth(E(9));
-            dirty |= Im::SliderInt("Companion limit", &draft.maxFollowers, 1, PARTY_CAPACITY, "%d",
-                                   Im::ImGuiSliderFlags_AlwaysClamp);
-            dirty |= Im::Checkbox("Automatically add followers", &draft.autoDiscover);
-            Help("Adds current and newly recruited followers as they load nearby. Remove keeps a follower "
-                 "excluded. Manual Add remains available when this is off.");
-            Im::BeginDisabled(!draft.autoDiscover);
-            Im::BeginDisabled(!view.nffInstalled);
-            dirty |= Im::Checkbox("Include NFF followers automatically", &draft.enforceNFF);
-            Help("Include active NFF followers in automatic enrollment.");
-            Im::EndDisabled();
-            dirty |= Im::Checkbox("Include custom followers automatically", &draft.enforceCustomFollowers);
-            Help("Include recruited custom teammates in automatic enrollment. Detection is not a "
-                 "compatibility guarantee.");
-            Im::EndDisabled();
-            Footer();
-            Im::EndChild();
-        }
         void Slider(const char* name, float& value, float low, float high, const char* format,
                     const char* hint)
         {
             Im::TableNextRow();
             Im::TableNextColumn();
-            Im::TextUnformatted(name);
+            Im::AlignTextToFramePadding();
+            Im::TextWrapped("%s", name);
             Help(hint);
             Im::TableNextColumn();
             Im::SetNextItemWidth(-1);
@@ -833,11 +858,26 @@ namespace Wayfarer::Menu
             Help(hint);
             Im::PopID();
         }
+        void IntSlider(const char* name, int& value, int low, int high, const char* format, const char* hint)
+        {
+            Im::TableNextRow();
+            Im::TableNextColumn();
+            Im::AlignTextToFramePadding();
+            Im::TextWrapped("%s", name);
+            Help(hint);
+            Im::TableNextColumn();
+            Im::SetNextItemWidth(-1);
+            Im::PushID(name);
+            dirty |= Im::SliderInt("##value", &value, low, high, format, Im::ImGuiSliderFlags_AlwaysClamp);
+            Help(hint);
+            Im::PopID();
+        }
         void Toggle(const char* name, bool& value, const char* hint)
         {
             Im::TableNextRow();
             Im::TableNextColumn();
-            Im::TextUnformatted(name);
+            Im::AlignTextToFramePadding();
+            Im::TextWrapped("%s", name);
             Help(hint);
             Im::TableNextColumn();
             Im::PushID(name);
@@ -847,21 +887,83 @@ namespace Wayfarer::Menu
         }
         bool Rows(const char* id)
         {
-            if (!Im::BeginTable(id, 2, Im::ImGuiTableFlags_SizingStretchSame | Im::ImGuiTableFlags_RowBg)) {
+            if (!Im::BeginTable(id, 2,
+                                Im::ImGuiTableFlags_SizingStretchProp | Im::ImGuiTableFlags_NoSavedSettings |
+                                    Im::ImGuiTableFlags_PadOuterX)) {
                 return false;
             }
+            Im::TableSetupColumn("Setting", Im::ImGuiTableColumnFlags_WidthStretch, .40F);
+            Im::TableSetupColumn("Value", Im::ImGuiTableColumnFlags_WidthStretch, .60F);
             return true;
+        }
+        bool Checks(const char* id, int maximum = 2)
+        {
+            // Checkbox + label share a cell. Keep room for longer labels and collapse on narrow panels.
+            const int columns =
+                std::clamp(static_cast<int>(Im::GetContentRegionAvail().x / E(13)), 1, maximum);
+            return Im::BeginTable(id, columns,
+                                  Im::ImGuiTableFlags_SizingStretchSame |
+                                      Im::ImGuiTableFlags_NoSavedSettings | Im::ImGuiTableFlags_PadOuterX);
+        }
+        void Check(const char* name, bool& value, const char* hint)
+        {
+            Im::TableNextColumn();
+            dirty |= Im::Checkbox(name, &value);
+            Help(hint);
+        }
+        void __stdcall RenderParty()
+        {
+            const auto view = Read();
+            Prepare(view);
+            SettingsPage page("WalkWithMeParty");
+            Header(view, "PARTY");
+            if (Rows("partyEnabled")) {
+                Toggle("Enable Walk With Me", draft.enabled, "Allow Walk With Me to manage the party.");
+                Im::EndTable();
+            }
+            if (Group("Party orders", 0)) {
+                OrderCards(view);
+            }
+            Label("COMPANIONS", 5);
+            Roster(view);
+            Im::BeginDisabled(!view.inGame);
+            if (Im::Button("Companion control...")) {
+                OpenPackageControl(view);
+            }
+            Help("Open a separate window to explicitly manage a nearby custom companion's travel or release "
+                 "a previous import.");
+            Im::EndDisabled();
+            if (Group("Enrollment", 5)) {
+                if (Rows("enrollment")) {
+                    IntSlider("Companion limit", draft.maxFollowers, 1, PARTY_CAPACITY, "%d",
+                              "Maximum managed companions.");
+                    Im::EndTable();
+                }
+                if (Checks("enrollmentOptions")) {
+                    Check("Automatically add followers", draft.autoDiscover,
+                          "Add recruited followers as they load nearby. Removed companions remain excluded. "
+                          "Manual Add still works.");
+                    Im::BeginDisabled(!draft.autoDiscover);
+                    Im::BeginDisabled(!view.nffInstalled);
+                    Check("Include NFF followers", draft.enforceNFF,
+                          "Include active NFF followers in automatic enrollment.");
+                    Im::EndDisabled();
+                    Check("Include custom followers", draft.enforceCustomFollowers,
+                          "Include recruited custom teammates in automatic enrollment. Detection is not a "
+                          "compatibility guarantee.");
+                    Im::EndDisabled();
+                    Im::EndTable();
+                }
+            }
+            Footer();
         }
         void __stdcall RenderTravel()
         {
             const auto view = Read();
             Prepare(view);
-            Theme theme;
-            Im::BeginChild("WalkWithMeTravel", {0, 0});
-            Im::SetWindowFontScale(.70F);
-            Header(view, "");
-            Label("TRAVEL", 4);
-            if (Rows("travel")) {
+            SettingsPage page("WalkWithMeTravel");
+            Header(view, "TRAVEL");
+            if (Group("Formation", 4) && Rows("travel")) {
                 Im::TableNextColumn();
                 Im::TextUnformatted("Default travel style");
                 Im::TableNextColumn();
@@ -891,6 +993,9 @@ namespace Wayfarer::Menu
                            "Extra setback for one or two Natural-mode companions. Their mutual spacing stays "
                            "normal. The choice stays stable while travelling; zero disables stragglers.");
                 }
+                Im::EndTable();
+            }
+            if (Group("Catch-up & teleport", 4) && Rows("catchup")) {
                 Slider("Catch-up response", draft.travel.catchUpSeconds, 1, 6, "%.1f s",
                        "Lower values close gaps more quickly.");
                 Slider("Catch-up speed cap", draft.travel.maxSpeedScale, 1, 1.75F, "%.2fx",
@@ -904,14 +1009,19 @@ namespace Wayfarer::Menu
                        "The boost ends inside this distance. Separate thresholds prevent repeated speed "
                        "switching.");
                 Toggle("Teleport distant companions", draft.teleportCatchup,
-                       "Bring traveling companions back after two seconds far away. Uses clear ground behind "
-                       "you; waits during combat, conversations, scripted scenes, wait orders and rest. "
-                       "Companions in other interiors or worldspaces keep their own travel AI.");
+                       "Bring companions back after two seconds far away, or three seconds left in another "
+                       "cell. Works while you ride, sneak, fight or stand still. Lands them behind you, then "
+                       "on your trail, then anywhere reachable nearby. Waiting, fighting, scripted, "
+                       "seated and relaxing companions stay put, and so does everyone in Sovngarde, "
+                       "Skuldafn, Apocrypha, the Soul Cairn and the Underforge.");
                 Im::BeginDisabled(!draft.teleportCatchup);
                 Slider(
                     "Teleport beyond", draft.teleportDistance, 1500, 15000, "%.0f units",
-                    "Distance from you before teleport catch-up. Each companion has a 15-second cooldown.");
+                    "Distance from you before teleport catch-up. Each companion has an 8-second cooldown.");
                 Im::EndDisabled();
+                Im::EndTable();
+            }
+            if (Group("Movement tuning", 4, false) && Rows("movement")) {
                 Slider("Anticipation", draft.travel.lookAhead, .2F, 1.5F, "%.2f s",
                        "How far ahead the party predicts your route.");
                 Toggle("Avoid obstacles ahead", draft.forwardCollision,
@@ -934,9 +1044,27 @@ namespace Wayfarer::Menu
                 Toggle("Outdoors only", draft.disableIndoors, "Release formation control inside buildings.");
                 Im::EndTable();
             }
-            Label("HAND HOLDING (EXPERIMENTAL)", 3);
-            if (Rows("handHolding")) {
+            if (Group("Hand holding (experimental)", 7, false) && Rows("handHolding")) {
                 auto& hands = draft.handHolding;
+                Im::TableNextColumn();
+                Im::TextUnformatted("Hand-holding method");
+                Im::TableNextColumn();
+                Im::SetNextItemWidth(-1);
+                const bool classic = hands.method == HandHolding::Method::Classic;
+                if (Im::BeginCombo("##handHoldMethod", classic ? "Classic" : "TETHER")) {
+                    if (Im::Selectable("Classic", classic)) {
+                        hands.method = HandHolding::Method::Classic;
+                        dirty = true;
+                    }
+                    if (Im::Selectable("TETHER", !classic)) {
+                        hands.method = HandHolding::Method::Tether;
+                        dirty = true;
+                    }
+                    Im::EndCombo();
+                }
+                Help("Classic restores the earlier procedural hand holding and needs no generated clasp "
+                     "animations. TETHER uses a physics grip and requires generated OAR clasp clips. "
+                     "Changing methods releases the current grip before reconnecting.");
                 Toggle("Hold hands (experimental)", hands.enabled,
                        "Work in progress: hands and wrists can still twist, and approach/turn animations may "
                        "look awkward. Disabled by default. Choose one companion to hold hands in "
@@ -988,133 +1116,18 @@ namespace Wayfarer::Menu
                        "Time in eligible Companion mode before looking for the selected follower. Paused "
                        "menus do not count. Releasing the grip restarts this delay.");
                 Slider("Connect within", hands.connectDistance, 60, 110, "%.0f units",
-                       "Pause and let the selected companion approach your side. Nearby arrival starts "
-                       "positioning; physics waits for aligned, close hands within 80 units. Walking away "
-                       "during setup cancels it.");
+                       "Pause and let the selected companion approach your side. Classic connects when "
+                       "the arms can reach; TETHER waits for aligned, close hands before its physics grip.");
                 hands.releaseDistance = std::max(hands.releaseDistance, hands.connectDistance + 10);
                 Slider("Release beyond", hands.releaseDistance, hands.connectDistance + 10, 160, "%.0f units",
-                       "Release after 0.4 seconds beyond this distance; another 45 units releases "
-                       "immediately. Reconnection waits through the lead-in again.");
+                       "Release when the pair separates beyond this distance. TETHER allows a brief "
+                       "grace period. Reconnection waits through the lead-in again.");
                 Im::EndTable();
-            }
-            Label("REST & SANDBOX", 3);
-            if (Rows("sandbox")) {
-                Toggle("Temporary rest", draft.sandbox.automatic,
-                       "Automatically rest after you stand still, then resume following when you leave the "
-                       "rest area. Turn off to disable automatic rest; the Relax command remains available. "
-                       "Saves immediately.");
-                Slider("Begin after", draft.travel.idleRelease, 2, 30, "%.0f s",
-                       "Time standing still before automatic sandboxing. Travel resumes when you leave the "
-                       "resume area.");
-                Slider("Nearby rest radius", draft.sandbox.startRadius, 40,
-                       std::min(600.0F, draft.releaseDistance - 200), "%.0f units",
-                       "Automatic stops only. Around 180 units leaves room to move and find nearby "
-                       "activities; very small areas can leave companions standing idle.");
-                draft.sandbox.maxRadius = std::max(draft.sandbox.maxRadius, draft.sandbox.startRadius);
-                Slider("Free-roam radius", draft.sandbox.maxRadius, draft.sandbox.startRadius,
-                       std::min(1800.0F, draft.releaseDistance - 200), "%.0f units",
-                       "Activity area used immediately by a Relax order, or after the automatic nearby phase "
-                       "ends.");
-                Slider("Indoor & town range", draft.sandbox.settledActivityRadius, 180,
-                       std::min(1800.0F, draft.releaseDistance - 200), "%.0f units",
-                       "Use nearby seats and activity markers from the start in homes, inns, other safe "
-                       "interiors and towns. Capped by Free-roam radius. Wilderness and dungeons keep the "
-                       "nearby phase; temporary rest keeps its resume distance.");
-                Slider("Activity height", draft.sandbox.activityHeight, 64, 1600, "%.0f units",
-                       "How far above or below the fixed rest anchor to seek activities. Connected stairs or "
-                       "ramps are required; low values keep searches near the current floor. Does not change "
-                       "Skyrim's global sandbox settings.");
-                Slider("Free roam after", draft.sandbox.fullSandboxAfter, 0, 180, "%.0f s",
-                       "Automatic stops only. One transition to the larger radius; current activities finish "
-                       "naturally. A direct Relax order skips this wait.");
-                Slider("Resume following beyond", draft.sandbox.resumeDistance, 100, 1000, "%.0f units",
-                       "Temporary rest continues while you stay within this distance of where you stopped, "
-                       "including dialogue. Relax ignores player distance.");
-                Slider("Idle recovery delay", draft.sandbox.idleRecoveryAfter, 0, 120, "%.0f s",
-                       "After sustained inactivity, allow a short walk inside the rest area. Personality "
-                       "adjusts this delay; staggered by up to 15 seconds, one companion at a time. Zero "
-                       "disables recovery.");
-                Toggle("Conversation gestures", draft.sandbox.social,
-                       "Optional silent gestures between two nearby companions during free roaming. No "
-                       "grouping or movement orders; native conversations remain available.");
-                Toggle("Extra rest poses", draft.sandbox.extraPoses,
-                       "Optional scripted poses. Off by default: Skyrim chooses its normal furniture, idles "
-                       "and activities.");
-                if (draft.sandbox.extraPoses) {
-                    Toggle("Ground sitting", draft.sandbox.groundSitting,
-                           "Sit on suitable outdoor wilderness ground. Never used inside buildings or "
-                           "dungeons.");
-                }
-                Toggle("Eating & drinking", draft.sandbox.meals,
-                       "Native meals plus occasional refreshments for idle companions in safe interiors and "
-                       "towns. Inns favor drinking; other places favor food. Does not require Extra rest "
-                       "poses. Disabled in caves and dungeons.");
-                if (draft.sandbox.extraPoses) {
-                    Toggle("Reading", draft.sandbox.reading, "Read during quiet rests in safe locations.");
-                }
-                if (draft.sandbox.extraPoses) {
-                    Toggle("Stretching", draft.sandbox.stretching,
-                           "Occasional brief stretches between longer rests.");
-                }
-                Im::EndTable();
-            }
-            Label("PARTY LIFE", 3);
-            if (Rows("partyLife")) {
-                Toggle("Celebrate battle victories", draft.victoryCelebrations,
-                       "After defeating at least three enemies in one fight, participating companions "
-                       "applaud with empty hands or cheer with a drawn sword or greatsword. Skips busy or "
-                       "injured companions and stops when danger returns.");
-                Toggle("Give conversations space", draft.conversationAwareness,
-                       "Other idle companions step aside during player dialogue. The speaking NPC, furniture "
-                       "users and active scenes are untouched.");
-                Toggle("Walk during follower banter", draft.walkingBanter,
-                       "Keep simple two-follower conversations moving. Partners try to trade positions with "
-                       "a nearby companion and walk beside each other. Scripted movement scenes and player "
-                       "dialogue retain control.");
-                if (draft.conversationAwareness) {
-                    Slider("Conversation space", draft.conversationClearance, 80, 300, "%.0f units",
-                           "Clearance around you, the NPC and the space between you. Only reachable "
-                           "positions are used.");
-                }
-                Toggle("Companion personalities", draft.personalities,
-                       "Stable automatic tendencies affect socializing, exploration and lookout preference. "
-                       "Override each companion on the Party page.");
-                Toggle("Occasional lookout", draft.lookouts,
-                       "During longer wilderness or dungeon rests, one free companion watches briefly. "
-                       "Requires at least three companions so two can still socialize.");
-                if (draft.lookouts) {
-                    Slider("Lookout after", draft.lookoutAfter, 30, 180, "%.0f s",
-                           "Minimum rest time before a lookout. Watches last 30-45 seconds, with 90-150 "
-                           "seconds between watches.");
-                }
-                Im::EndTable();
-            }
-            Label("ORDER EMBLEM", 0);
-            if (Rows("hud")) {
-                Toggle("Show emblem", draft.showOrderHUD,
-                       "Shows the current order on the right side of the screen.");
-                Toggle("Soft HUD backing", draft.hudPanel,
-                       "Subtle dark backing behind the order. Disable for bare icon and text.");
-                Slider("Size", draft.hudScale, .55F, 1.3F, "%.2fx", "Scale the small order emblem.");
-                Slider("Height", draft.hudVertical, .1F, .85F, "%.2f", "Distance down the right edge.");
-                Im::EndTable();
-                hudPreviewAt = GetTickCount64();
-                hudPreviewEnabled = draft.showOrderHUD;
-                hudPreviewScale = draft.hudScale;
-                hudPreviewHeight = draft.hudVertical;
-                hudPreviewPanel = draft.hudPanel;
-                Note("Changes take effect and save automatically.");
-            }
-            if (Im::CollapsingHeader("Troubleshooting")) {
-                if (Rows("debug")) {
-                    Toggle("Eligibility log", draft.logDiagnostics, "Record why a companion is released.");
-                    Toggle("Movement log", draft.traceMovement, "Record movement samples once per second.");
-                    Im::EndTable();
-                }
             }
             if (Im::SmallButton("Restore travel defaults")) {
+                const float restDelay = draft.travel.idleRelease;
                 draft.travel = SettingsData{}.travel;
-                draft.sandbox = SettingsData{}.sandbox;
+                draft.travel.idleRelease = restDelay;
                 draft.distantCatchupStart = 900;
                 draft.distantCatchupEnd = 500;
                 draft.teleportCatchup = true;
@@ -1125,16 +1138,301 @@ namespace Wayfarer::Menu
                 dirty = true;
             }
             Footer();
-            Im::EndChild();
+        }
+        void __stdcall RenderRest()
+        {
+            const auto view = Read();
+            Prepare(view);
+            SettingsPage page("WalkWithMeRest");
+            Header(view, "REST");
+            if (Group("Rest & exploration", 3) && Rows("sandbox")) {
+                Toggle("Temporary rest", draft.sandbox.automatic,
+                       "Automatically rest after you stand still, then resume following when you leave the "
+                       "rest area. Turn off to disable automatic rest; the Relax command remains available. "
+                       "Saves immediately.");
+                Im::BeginDisabled(!draft.sandbox.automatic);
+                Slider("Begin after", draft.travel.idleRelease, 2, 30, "%.0f s",
+                       "Time standing still before automatic sandboxing. Travel resumes when you leave the "
+                       "resume area.");
+                Im::EndDisabled();
+                Slider("Nearby rest radius", draft.sandbox.startRadius, 40,
+                       std::min(600.0F, draft.releaseDistance - 200), "%.0f units",
+                       "Automatic stops only, until free roam opens. Companions head for activities inside "
+                       "it straight away; very small areas can leave them standing idle.");
+                draft.sandbox.maxRadius = std::max(draft.sandbox.maxRadius, draft.sandbox.startRadius);
+                Slider("Free-roam radius", draft.sandbox.maxRadius, draft.sandbox.startRadius,
+                       std::min(1800.0F, draft.releaseDistance - 200), "%.0f units",
+                       "Activity area used immediately by a Relax order, or after the automatic nearby phase "
+                       "ends. Companions set out for seats, idle markers or open ground across it at once.");
+                Slider("Indoor & town range", draft.sandbox.settledActivityRadius, 180,
+                       std::min(1800.0F, draft.releaseDistance - 200), "%.0f units",
+                       "Use nearby seats and activity markers from the start in homes, inns, other safe "
+                       "interiors and towns. Capped by Free-roam radius. Wilderness and dungeons keep the "
+                       "nearby phase; temporary rest keeps its resume distance.");
+                Im::EndTable();
+            }
+            if (Group("Rest timing & limits", 3, false) && Rows("restTuning")) {
+                Slider("Activity height", draft.sandbox.activityHeight, 64, 1600, "%.0f units",
+                       "How far above or below the fixed rest anchor to seek activities. Connected stairs or "
+                       "ramps are required; low values keep searches near the current floor. Does not change "
+                       "Skyrim's global sandbox settings.");
+                Slider("Free roam after", draft.sandbox.fullSandboxAfter, 0, 180, "%.0f s",
+                       "Automatic stops only. One transition to the larger radius, after which companions "
+                       "head out across it. A direct Relax order skips this wait.");
+                Slider("Resume following beyond", draft.sandbox.resumeDistance, 100, 1000, "%.0f units",
+                       "Temporary rest continues while you stay within this distance of where you stopped, "
+                       "including dialogue. Relax ignores player distance.");
+                Slider("Idle recovery delay", draft.sandbox.idleRecoveryAfter, 0, 120, "%.0f s",
+                       "After sustained inactivity, allow a short walk inside the rest area. Personality "
+                       "adjusts this delay; staggered by up to 15 seconds, one companion at a time. Zero "
+                       "disables recovery.");
+                Im::EndTable();
+            }
+            if (Group("Activities", 3) && Checks("activities")) {
+                Check(
+                    "Companion conversations", draft.sandbox.social,
+                    "From time to time two resting companions pair up and talk for two to three minutes, "
+                    "with silent gestures. If they are apart, one walks over first. With Area activities the "
+                    "place shapes it: hushed in caves and ruins, over a drink at an inn.");
+                Check(
+                    "Area activities", draft.sandbox.areaActivities,
+                    "Resting fits the place: warming hands at fires, praying at shrines, the water's edge "
+                    "and lookouts outdoors, sweeping at home, nervous glances in caves and ruins. At an inn "
+                    "they share a table, call a server for drinks and applaud the bard.");
+                Check("Extra rest poses", draft.sandbox.extraPoses,
+                      "Optional scripted poses. Off by default: Skyrim chooses its normal furniture, idles "
+                      "and activities.");
+                if (draft.sandbox.extraPoses) {
+                    Check("Ground sitting", draft.sandbox.groundSitting,
+                          "Sit on suitable outdoor wilderness ground. Never used inside buildings or "
+                          "dungeons.");
+                }
+                Check("Eating & drinking", draft.sandbox.meals,
+                      "Native meals plus occasional refreshments for idle companions in safe interiors and "
+                      "towns. Inns favor drinking; other places favor food. Does not require Extra rest "
+                      "poses. Disabled in caves and dungeons.");
+                if (draft.sandbox.extraPoses) {
+                    Check("Reading", draft.sandbox.reading, "Read during quiet rests in safe locations.");
+                }
+                if (draft.sandbox.extraPoses) {
+                    Check("Stretching", draft.sandbox.stretching,
+                          "Occasional brief stretches between longer rests.");
+                }
+                Im::EndTable();
+            }
+            if (Group("Party life", 5)) {
+                if (Checks("partyLife")) {
+                    Check("Give conversations space", draft.conversationAwareness,
+                          "Other idle companions step aside during player dialogue. The speaking NPC, "
+                          "furniture "
+                          "users and active scenes are untouched.");
+                    Check(
+                        "Walk during follower banter", draft.walkingBanter,
+                        "Keep simple two-follower conversations moving. Partners try to trade positions with "
+                        "a nearby companion and walk beside each other. Scripted movement scenes and player "
+                        "dialogue retain control.");
+                    Check(
+                        "Companion personalities", draft.personalities,
+                        "Stable automatic tendencies affect socializing, exploration and lookout preference. "
+                        "Override each companion on the Party page.");
+                    Check("Occasional lookout", draft.lookouts,
+                          "During longer wilderness or dungeon rests, one free companion watches briefly. "
+                          "Requires at least three companions so two can still socialize.");
+                    Im::EndTable();
+                }
+                if ((draft.conversationAwareness || draft.lookouts) && Rows("partyLifeTuning")) {
+                    if (draft.conversationAwareness) {
+                        Slider("Conversation space", draft.conversationClearance, 80, 300, "%.0f units",
+                               "Clearance around you, the NPC and the space between you. Only reachable "
+                               "positions are used.");
+                    }
+                    if (draft.lookouts) {
+                        Slider("Lookout after", draft.lookoutAfter, 30, 180, "%.0f s",
+                               "Minimum rest time before a lookout. Watches last 30-45 seconds, with 90-150 "
+                               "seconds between watches.");
+                    }
+                    Im::EndTable();
+                }
+            }
+            if (Im::SmallButton("Restore rest defaults")) {
+                draft.sandbox = SettingsData{}.sandbox;
+                draft.travel.idleRelease = SettingsData{}.travel.idleRelease;
+                dirty = true;
+            }
+            Footer();
+        }
+        void __stdcall RenderLoot()
+        {
+            const auto view = Read();
+            Prepare(view);
+            SettingsPage page("WalkWithMeLoot");
+            Header(view, "LOOT");
+            if (Group("Loot scouting", 8)) {
+                auto& loot = draft.loot;
+                dirty |= Im::Checkbox("Point out loot", &loot.enabled);
+                Help("Your loot finder looks over the chests, bodies and valuable items in view, walks to "
+                     "the richest one and kneels to search it. One find per area. Works while travelling "
+                     "or standing still, not during rest or Relax.");
+                Im::BeginDisabled(!loot.enabled);
+                if (Rows("lootFinder")) {
+                    Im::TableNextColumn();
+                    Im::TextUnformatted("Loot finder");
+                    Im::TableNextColumn();
+                    Im::SetNextItemWidth(-1);
+                    std::string finder = loot.finder.empty()       ? "Any companion"
+                                         : loot.finderName.empty() ? "Selected companion"
+                                                                   : loot.finderName;
+                    if (!loot.finder.empty() &&
+                        std::none_of(view.party.begin(), view.party.end(),
+                                     [&](const auto& row) { return row.handHoldKey == loot.finder; })) {
+                        finder += " (not nearby)";
+                    }
+                    if (Im::BeginCombo("##lootFinder", finder.c_str())) {
+                        if (Im::Selectable("Any companion", loot.finder.empty())) {
+                            loot.finder.clear();
+                            loot.finderName.clear();
+                            dirty = true;
+                        }
+                        for (const auto& row : view.party) {
+                            Im::PushID(static_cast<int>(row.id));
+                            const bool selectable = !row.excluded && !row.handHoldKey.empty();
+                            Im::BeginDisabled(!selectable);
+                            if (Im::Selectable(row.name.c_str(),
+                                               !loot.finder.empty() && row.handHoldKey == loot.finder)) {
+                                loot.finder = row.handHoldKey;
+                                loot.finderName = row.name;
+                                dirty = true;
+                            }
+                            Im::EndDisabled();
+                            if (!selectable) {
+                                Help(row.handHoldKey.empty()
+                                         ? "This temporary actor has no persistent reference "
+                                           "to remember. Choose a placed companion."
+                                         : "Include this companion on the Party page first.");
+                            }
+                            Im::PopID();
+                        }
+                        Im::EndCombo();
+                    }
+                    Help("Only one companion goes to a find at a time. Choose who does it, or leave Any "
+                         "companion "
+                         "to send whoever is nearest. Selection saves automatically.");
+                    Im::EndTable();
+                }
+                if (Checks("lootFilters")) {
+                    Check(
+                        "Containers", loot.containers,
+                        "Chests, urns, sacks and other containers. Owned containers (stealing) and your own "
+                        "storage are ignored. Food-only containers are skipped.");
+                    Check("Bodies", loot.bodies,
+                          "Dead people and creatures carrying real loot. Bodies with only pelts, meat or "
+                          "ingredients are skipped.");
+                    Check("Loose valuables", loot.looseItems,
+                          "Unowned items lying in the world, but only when they are worth more than the "
+                          "valuable threshold.");
+                    Check(
+                        "Inside homes and inns", loot.inhabitedInteriors,
+                        "Off: no scouting inside houses, inns, temples, shops, castles, guilds and your own "
+                        "home. "
+                        "Caves, ruins and the outdoors are unaffected.");
+                    Im::EndTable();
+                }
+                Im::EndDisabled();
+            }
+            if (Group("Search tuning", 8, false) && Rows("lootTuning")) {
+                auto& loot = draft.loot;
+                Im::BeginDisabled(!loot.enabled);
+                Slider("Notice within", loot.searchRadius, 300, 2500, "%.0f units",
+                       "How far from a companion a find can be. They must also have a clear line of sight "
+                       "to it.");
+                Slider("Leave when you are beyond", loot.leaveDistance, 600,
+                       std::max(600.0F, draft.releaseDistance - 100), "%.0f units",
+                       "If you move this far from the find, the companion leaves it and rejoins you. Finds "
+                       "must start within 80% of this distance from you.");
+                IntSlider("Valuable above", loot.valuableGold, 100, 10000, "%d gold",
+                          "If any single item in the find is worth more than this, the icon turns gold. "
+                          "Piles of septims count as a whole.");
+                Slider("Search for", loot.searchSeconds, 5, 30, "%.0f s",
+                       "How long the finder kneels at the find before standing up to wait beside it. "
+                       "Opening the find or moving away ends it sooner.");
+                Slider("Search again after moving", loot.areaDistance, 800, 6000, "%.0f units",
+                       "After the finder reaches one find, they stop looking until you are this far from it, "
+                       "or enter another interior or worldspace.");
+                Im::EndDisabled();
+                Im::EndTable();
+            }
+            if (Im::SmallButton("Restore loot tuning")) {
+                const Loot::Tuning defaults;
+                draft.loot.searchRadius = defaults.searchRadius;
+                draft.loot.leaveDistance = defaults.leaveDistance;
+                draft.loot.valuableGold = defaults.valuableGold;
+                draft.loot.searchSeconds = defaults.searchSeconds;
+                draft.loot.areaDistance = defaults.areaDistance;
+                dirty = true;
+            }
+            Footer();
+        }
+        void __stdcall RenderInterface()
+        {
+            const auto view = Read();
+            Prepare(view);
+            SettingsPage page("WalkWithMeInterface");
+            Header(view, "INTERFACE");
+            if (Group("Follower icons", 7) && Checks("followerIcons", 3)) {
+                Check(
+                    "Show chat icons", draft.restDialogueIcons,
+                    "Show an ivory speech bubble above resting companions with unheard conversation options. "
+                    "Filters follower commands, trading, services and random chatter.");
+                Im::BeginDisabled(!draft.restDialogueIcons);
+                Check("Animate chat icons", draft.animateChatIcons,
+                      "Pop up and gently float chat icons above companions. Off keeps a still, slightly "
+                      "transparent icon.");
+                Im::EndDisabled();
+                Check("Show loot icons", draft.loot.icons,
+                      "An animated chest marks the loot finder: ivory for ordinary loot, gold for valuable "
+                      "items. "
+                      "Requires loot scouting on the Loot page.");
+                Im::EndTable();
+            }
+            if (Group("Order emblem", 0)) {
+                if (Checks("hudOptions")) {
+                    Check("Show emblem", draft.showOrderHUD,
+                          "Shows the current order on the right side of the screen.");
+                    Im::BeginDisabled(!draft.showOrderHUD);
+                    Check("Soft HUD backing", draft.hudPanel,
+                          "Subtle dark backing behind the order. Disable for bare icon and text.");
+                    Im::EndDisabled();
+                    Im::EndTable();
+                }
+                if (Rows("hudSize")) {
+                    Im::BeginDisabled(!draft.showOrderHUD);
+                    Slider("Size", draft.hudScale, .55F, 1.3F, "%.2fx", "Scale the small order emblem.");
+                    Slider("Height", draft.hudVertical, .1F, .85F, "%.2f", "Distance down the right edge.");
+                    Im::EndDisabled();
+                    Im::EndTable();
+                }
+                hudPreviewAt = GetTickCount64();
+                hudPreviewEnabled = draft.showOrderHUD;
+                hudPreviewScale = draft.hudScale;
+                hudPreviewHeight = draft.hudVertical;
+                hudPreviewPanel = draft.hudPanel;
+                Note("Changes take effect and save automatically.");
+            }
+            if (Group("Troubleshooting", 6, false)) {
+                if (Checks("debug")) {
+                    Check("Eligibility log", draft.logDiagnostics, "Record why a companion is released.");
+                    Check("Movement log", draft.traceMovement, "Record movement samples once per second.");
+                    Im::EndTable();
+                }
+            }
+            Footer();
         }
         void __stdcall RenderControls()
         {
             const auto view = Read();
             Prepare(view);
-            Theme theme;
-            Im::BeginChild("WalkWithMeControls", {0, 0});
-            Im::SetWindowFontScale(0.70F);
-            Header(view, "Orders within reach. Bind only what you use.");
+            SettingsPage page("WalkWithMeControls");
+            Header(view, "CONTROLS");
             Label("KEY BINDINGS", 6);
             Note("Select a binding, then hold Shift, Ctrl or Alt and press a key. Modifiers can be combined; "
                  "either side works. Esc cancels; Delete clears.");
@@ -1172,45 +1470,45 @@ namespace Wayfarer::Menu
                 }
                 Im::EndTable();
             }
-            Label("PARTY ORDERS", 0);
-            if (Im::Combo("Gamepad wheel", &draft.gamepadBinding,
-                          "Unbound\0LB + Right-stick click\0LB + Y\0LB + D-pad up\0")) {
-                dirty = true;
-            }
-            Help("Hold LB and press the chosen button to open. Right stick aims; A confirms; B cancels. "
-                 "Camera look is consumed only while the wheel is open.");
-            if (Im::Checkbox("Command hand signal", &draft.commandGestures)) {
-                dirty = true;
-            }
-            Help("Includes original third-person gestures for Lead, Companion and Rear, with female "
-                 "variants. First person and other orders use installed First Person Interactions clips. "
-                 "Requires Open Animation Replacer and generated GP Offset Movement Animation behaviors. "
-                 "Skips busy channels and weapons drawn.");
-            if (draft.commandGestures) {
-                if (Im::Checkbox("Glance toward followers", &draft.gestureAwareness)) {
-                    dirty = true;
+            if (Group("Wheel & signals", 0)) {
+                if (Rows("signals")) {
+                    Im::TableNextRow();
+                    Im::TableNextColumn();
+                    Im::AlignTextToFramePadding();
+                    Im::TextUnformatted("Gamepad wheel");
+                    Im::TableNextColumn();
+                    Im::SetNextItemWidth(-1);
+                    dirty |= Im::Combo("##gamepadWheel", &draft.gamepadBinding,
+                                       "Unbound\0LB + Right-stick click\0LB + Y\0LB + D-pad up\0");
+                    Help("Hold LB and press the chosen button. Right stick aims; A confirms; B cancels.");
+                    Im::EndTable();
                 }
-                Help("Briefly turn your head toward the party during a signal. A stronger glance for "
-                     "followers behind you, a subtle turn for those beside you. Third person only.");
-                if (Im::Checkbox("Point for Lead", &draft.pointingSignal)) {
-                    dirty = true;
+                if (Checks("gestureOptions")) {
+                    Check("Command hand signal", draft.commandGestures,
+                          "Third-person Lead, Companion and Rear gestures need OAR and generated GP Offset "
+                          "Movement "
+                          "Animation behaviors. First-person signals use installed First Person Interactions "
+                          "clips.");
+                    Im::BeginDisabled(!draft.commandGestures);
+                    Check("Glance toward followers", draft.gestureAwareness,
+                          "Briefly turn toward the party during a signal. Third person only.");
+                    Check("Point for Lead", draft.pointingSignal,
+                          "Use the bundled left-hand point in third person. First person keeps the installed "
+                          "FPI forward reach.");
+                    Check(
+                        "Invitation for Companion", draft.companionSignal,
+                        "Use the bundled two-arm invitation in third person. First person uses the installed "
+                        "FPI wave.");
+                    Im::EndDisabled();
+                    Im::EndTable();
                 }
-                Help("Use the bundled left-hand point in third person. First person keeps the installed FPI "
-                     "forward reach; movement remains free.");
-                if (Im::Checkbox("Invitation for Companion", &draft.companionSignal)) {
-                    dirty = true;
-                }
-                Help("Use the bundled two-arm invitation in third person with upper-body blending. First "
-                     "person uses the installed FPI wave.");
             }
-
             if (Im::Button("Open party orders") && commandWindow) {
                 SetWheelOpen(true);
             }
             Help("Commands pause in game menus. Avoid keys used by other mods or Skyrim quicksave / "
                  "quickload.");
             Footer();
-            Im::EndChild();
         }
 
         // ORDER_UTILITY_CARD_BEGIN: shared with the offline visual proof.
@@ -1536,10 +1834,44 @@ namespace Wayfarer::Menu
         }
         void __stdcall RenderHUD()
         {
+            const auto view = Read();
+            static Overhead::Animation chatMotion, lootMotion;
+            static std::uint64_t markerGeneration{};
+            if (markerGeneration != view.generation) {
+                chatMotion.Clear();
+                lootMotion.Clear();
+                markerGeneration = view.generation;
+            }
+            chatMotion.BeginFrame(Im::GetIO()->DeltaTime);
+            lootMotion.BeginFrame(Im::GetIO()->DeltaTime);
+            // Publish only game-thread projections; never retain a hidden or missing marker.
+            if (view.inGame && view.enabled && !MF::IsAnyBlockingWindowOpened()) {
+                const auto display = Im::GetIO()->DisplaySize;
+                const float scale = std::clamp(display.y / 1080.0F, .65F, 2.5F);
+                auto* draw = Im::GetForegroundDrawList();
+                if (view.settings.restDialogueIcons) {
+                    for (const auto& marker : RestDialogue::ReadMarkers()) {
+                        const auto pose = chatMotion.Show(marker.actor, view.settings.animateChatIcons);
+                        const float size = 36 * scale;
+                        const V p{marker.x * display.x, marker.y * display.y + pose.rise * size};
+                        OrderVisuals::Chat(draw, p, size * pose.scale, pose.alpha);
+                    }
+                }
+                if (view.settings.loot.enabled && view.settings.loot.icons) {
+                    for (const auto& marker : Loot::ReadMarkers()) {
+                        const auto pose = lootMotion.Show(marker.actor);
+                        const float size = 34 * scale;
+                        const V p{marker.x * display.x, marker.y * display.y + pose.rise * size};
+                        OrderVisuals::Loot(draw, p, size * pose.scale, marker.valuable,
+                                           pose.alpha * marker.alpha);
+                    }
+                }
+            }
+            chatMotion.EndFrame();
+            lootMotion.EndFrame();
             if (capturing.load() >= 0 && GetTickCount64() - captureStarted.load() > 15000) {
                 CancelCapture();
             }
-            const auto view = Read();
             const bool preview = hudPreviewAt && GetTickCount64() - hudPreviewAt < 200;
             const bool show = preview ? hudPreviewEnabled : view.settings.showOrderHUD;
             static HudNotice notice;
@@ -1854,6 +2186,7 @@ namespace Wayfarer::Menu
     }
     void Reset()
     {
+        RestDialogue::Reset();
         CommandGesture::Reset();
         padHeld = 0;
         padX = 0;
@@ -1902,6 +2235,9 @@ namespace Wayfarer::Menu
         MF::SetSection("Walk With Me");
         MF::AddSectionItem("Party", RenderParty);
         MF::AddSectionItem("Travel", RenderTravel);
+        MF::AddSectionItem("Rest", RenderRest);
+        MF::AddSectionItem("Loot", RenderLoot);
+        MF::AddSectionItem("Interface", RenderInterface);
         MF::AddSectionItem("Controls", RenderControls);
         commandWindow = MF::AddWindow(RenderCommands, true);
         packageWindow = MF::AddWindow(RenderPackageControl, true);
@@ -1912,7 +2248,8 @@ namespace Wayfarer::Menu
         hudRegistration.reset(MF::AddHudElement(RenderHUD));
         eventRegistration.reset(MF::AddEvent(OnMenuEvent, 0));
         installed.store(true);
-        logger::info("[Menu] Party, Travel, Controls, command window and HUD registered (framework {})",
+        logger::info("[Menu] Party, Travel, Rest, Loot, Interface, Controls, command window and HUD "
+                     "registered (framework {})",
                      MF::GetMenuFrameworkVersion());
     }
 } // namespace Wayfarer::Menu

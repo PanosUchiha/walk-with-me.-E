@@ -5,6 +5,10 @@
 
 namespace
 {
+    bool VictoryHoldState(RE::StaticFunctionTag*, RE::Actor* actor, std::int32_t ticket, std::int32_t state)
+    {
+        return Wayfarer::FormationController::GetSingleton().VictoryHoldState(actor, ticket, state);
+    }
     constexpr std::string_view SCRIPT_NAME = "Wayfarer";
     bool ConsumeCompanionPush(RE::StaticFunctionTag*, RE::Actor* actor, std::int32_t ticket)
     {
@@ -157,6 +161,11 @@ namespace
             Wayfarer::FormationController::GetSingleton().ConfirmTetherHandoff(slot, ticket);
         }
     }
+    RE::BGSRefAlias* GetTetherHandoffAlias(RE::StaticFunctionTag*, std::int32_t slot, std::int32_t ticket)
+    {
+        return slot < 0 ? nullptr
+                        : Wayfarer::FormationController::GetSingleton().GetTetherHandoffAlias(slot, ticket);
+    }
 } // namespace
 
 namespace Wayfarer::Papyrus
@@ -189,11 +198,13 @@ namespace Wayfarer::Papyrus
         a_vm->RegisterFunction("HasSocialGroup", SCRIPT_NAME, HasSocialGroup);
         a_vm->RegisterFunction("ShouldSuspendForDialogue", SCRIPT_NAME, ShouldSuspendForDialogue);
         a_vm->RegisterFunction("ReportAliasSync", SCRIPT_NAME, ReportAliasSync);
+        a_vm->RegisterFunction("HoldState", "WayfarerVictoryVoice", VictoryHoldState);
         a_vm->RegisterFunction("ReportSocialIdle", SCRIPT_NAME, ReportSocialIdle);
         a_vm->RegisterFunction("ConsumeSocialIdle", SCRIPT_NAME, ConsumeSocialIdle);
         a_vm->RegisterFunction("ReloadSettings", SCRIPT_NAME, ReloadSettings);
         a_vm->RegisterFunction("TetherStepStatus", SCRIPT_NAME, TetherStepStatus);
         a_vm->RegisterFunction("GetTetherHandoffTicket", SCRIPT_NAME, GetTetherHandoffTicket);
+        a_vm->RegisterFunction("GetTetherHandoffAlias", SCRIPT_NAME, GetTetherHandoffAlias);
         a_vm->RegisterFunction("ConfirmTetherHandoff", SCRIPT_NAME, ConfirmTetherHandoff);
         logger::info("[Papyrus] Wayfarer native API registered.");
         return true;

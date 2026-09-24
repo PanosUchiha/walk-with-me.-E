@@ -30,6 +30,10 @@ namespace Wayfarer::HandHolding
         bool closing{};
         IK::Point velocity{};
         float heading{};
+        // TETHER keeps the arrival destination here until the grip is connected.
+        // Do not resume an ordinary formation route during physics setup.
+        bool holdPosition{};
+        IK::Point position{};
     };
     Approach GetApproach();
 } // namespace Wayfarer::HandHolding

@@ -32,13 +32,15 @@ int main()
 {
     {
         SandboxTuning tavern;
-        Check(ActivityRadius(RestContext::Tavern, 180, tavern) == 1000,
+        const float settled = tavern.settledActivityRadius;
+        Check(settled == 1600 && tavern.maxRadius == 1600, "default rest range covers a wide area");
+        Check(ActivityRadius(RestContext::Tavern, 180, tavern) == settled,
               "temporary tavern rest can reach room activities immediately");
         Check(ActivityRadius(RestContext::Wilderness, 180, tavern) == 180,
               "wilderness keeps its nearby phase");
-        Check(ActivityRadius(RestContext::Interior, 180, tavern) == 1000,
+        Check(ActivityRadius(RestContext::Interior, 180, tavern) == settled,
               "homes and other safe interiors can use activity markers immediately");
-        Check(ActivityRadius(RestContext::Settlement, 180, tavern) == 1000,
+        Check(ActivityRadius(RestContext::Settlement, 180, tavern) == settled,
               "outdoor towns use the same activity range");
         Check(ActivityRadius(RestContext::Dungeon, 180, tavern) == 180,
               "dungeon stays local before the gate");
@@ -128,25 +130,28 @@ int main()
     Check(TravelSpeedTarget(1.1F, 1.5F, false, 700, 400, 900, 500) == 1.1F,
           "normal pace keeps existing taper");
     Check(TravelSpeedTarget(1, 1.75F, true, 2200, 1800, 900, 500) == 3.5F, "maximum selected cap doubles");
+    const SandboxTuning defaults;
     SandboxState state;
     Wait(state, 7.75F);
     Check(!state.active, "ordinary stop waits for delay");
     Wait(state, .25F);
-    Check(state.active && state.radius == 180, "sandbox starts small");
+    Check(state.active && state.radius == defaults.startRadius, "sandbox starts small");
     Check(state.AllowsSocial({}) && !state.expanded, "nearby rest allows conversations before expansion");
     SandboxTuning silent;
     silent.social = false;
     Check(!state.AllowsSocial(silent), "social toggle still disables nearby conversations");
     SandboxState inactive;
     Check(!inactive.AllowsSocial({}), "travel cannot start a rest conversation");
-    Wait(state, 10);
-    Check(state.radius == 180 && !state.expanded, "ten seconds does not expand or restart rest");
-    Wait(state, 19.75F);
-    Check(state.radius == 180 && !state.expanded, "nearby phase lasts the full thirty seconds");
+    Wait(state, defaults.fullSandboxAfter / 2);
+    Check(state.radius == defaults.startRadius && !state.expanded,
+          "a short wait does not expand or restart rest");
+    Wait(state, defaults.fullSandboxAfter / 2 - .25F);
+    Check(state.radius == defaults.startRadius && !state.expanded, "nearby phase lasts the full delay");
     Wait(state, .25F);
-    Check(state.radius == 1000 && state.expanded, "one gate opens the full native sandbox radius");
+    Check(state.radius == defaults.maxRadius && state.expanded, "one gate opens the full native sandbox radius");
     Wait(state, 1000);
-    Check(state.active && state.radius == 1000 && state.expanded, "no repeated growth stages after opening");
+    Check(state.active && state.radius == defaults.maxRadius && state.expanded,
+          "no repeated growth stages after opening");
     state.Update({200, 0}, 100, .25F, false, 8, {});
     Check(state.active && state.center.x == 0, "walking to nearby NPC retains temporary rest anchor");
     state.Update({250, 0}, 0, .25F, false, 8, {});
@@ -157,12 +162,12 @@ int main()
     Check(!state.active, "does not instantly restart after leaving rest area");
     state.Reset();
     Wait(state, .25F, true);
-    Check(state.active && state.radius == 1000 && state.expanded,
+    Check(state.active && state.radius == defaults.maxRadius && state.expanded,
           "explicit Relax immediately uses the full activity area");
     Wait(state, 30, true);
-    Check(state.radius == 1000 && state.expanded, "explicit Relax remains in the full area");
+    Check(state.radius == defaults.maxRadius && state.expanded, "explicit Relax remains in the full area");
     state.Update({5000, 0}, 300, .25F, true, 8, {});
-    Check(state.active && state.radius == 1000 && state.center.x == 0,
+    Check(state.active && state.radius == defaults.maxRadius && state.center.x == 0,
           "Relax neither follows nor shrinks when player leaves");
     SandboxTuning off;
     off.automatic = false;
@@ -248,14 +253,14 @@ int main()
     for (int i = 0; i < 32; ++i) {
         state.Update({400, 0}, 0, .25F, false, 8, {});
     }
-    Check(state.active && state.radius == 180 && !state.expanded && state.center.x == 400,
+    Check(state.active && state.radius == defaults.startRadius && !state.expanded && state.center.x == 400,
           "a fresh stop begins at the small radius again");
 
     state.Reset();
     Wait(state, 8);
     Wait(state, 5);
     state.Update({120, 0}, 60, .25F, true, 8, {});
-    Check(state.expanded && state.radius == 1000 && state.center.x == 0,
+    Check(state.expanded && state.radius == defaults.maxRadius && state.center.x == 0,
           "Relax opens an existing nearby stop without moving its anchor");
     SandboxTuning custom;
     custom.startRadius = 80;
@@ -264,7 +269,7 @@ int main()
     Wait(state, 8, false, custom);
     Check(state.radius == 80, "custom small radius remains configurable");
     Wait(state, 30, false, custom);
-    Check(state.expanded && state.radius == 700, "custom radius advances after thirty unpaused seconds");
+    Check(state.expanded && state.radius == 700, "custom radius advances after the unpaused delay");
     SocialPlanner social;
     RestRecovery waiting;
     for (int tick = 0; tick < 120; ++tick) {
@@ -305,6 +310,23 @@ int main()
         recovery.Reset();
         Check(!recovery.walking && recovery.quiet == 0, "rest ending clears recovery state");
     }
+    ActivitySearch dispersal;
+    dispersal.Prime(1);
+    Check(!dispersal.Primed(.5F, true), "dispersal waits for its stagger");
+    Check(dispersal.Primed(.5F, true), "dispersal starts without a stretch of plain standing");
+    dispersal.Attempt(7);
+    Check(!dispersal.Primed(.25F, true), "one dispersal search per rest start or widening");
+    dispersal.Prime(0);
+    for (int i = 0; i < 80; ++i) {
+        Check(!dispersal.Primed(.25F, false), "a busy companion is not sent off");
+    }
+    Check(!dispersal.primed && !dispersal.Primed(.25F, true),
+          "a companion busy for the whole window is left to ordinary searches");
+    RestRecovery outing;
+    outing.Begin();
+    outing.dispersal = true;
+    outing.Finish();
+    Check(!outing.dispersal, "a finished dispersal walk does not mark the next walk");
     auto begin = [&](const std::vector<SocialCandidate>& candidates) {
         for (int i = 0; i < 30 && !social.count; ++i) {
             social.cooldown = 0;
@@ -313,25 +335,63 @@ int main()
     };
     std::vector<SocialCandidate> nearby{{1, {0, 0}},    {2, {80, 0}},    {3, {160, 0}},
                                         {4, {100, 80}}, {5, {100, 100}}, {6, {200, 0}}};
-    Check(!social.Update(2.5F, nearby) && !social.count,
-          "initial pause before optional conversation gestures");
+    for (int i = 0; i < 70; ++i) {
+        Check(!social.Update(.25F, nearby) && !social.count,
+              "companions reach their own activities before the first conversation");
+    }
     begin(nearby);
-    Check(social.count == 2, "six followers only select a one-to-one conversation");
+    Check(social.count == 2 && !social.gathering, "six followers only select a one-to-one conversation");
     auto speaker = social.Speaker();
     auto listener = social.Listener(speaker);
     Check(speaker && listener && speaker != listener, "each participant addresses only its partner");
+    Check(social.Holds(speaker) && social.Holds(listener), "both talkers are held for the conversation");
     int unselected = 0;
     for (auto& candidate : nearby) {
         unselected += social.Index(candidate.id) < 0;
     }
     Check(unselected == 4, "other four companions remain uninvolved");
-    social.Update(5, nearby);
+    for (int i = 0; i < 40 && social.Speaker() == speaker; ++i) {
+        social.Update(.25F, nearby);
+    }
     Check(social.Speaker() == listener, "the pair exchanges turns");
-    social.Update(40, nearby);
-    Check(!social.count && social.cooldown >= 20, "conversation ends and leaves a quiet interval");
+    const float talk = social.duration;
+    Check(talk >= 120 && talk <= 180, "conversations last two to three minutes");
+    while (social.elapsed + .5F < talk) {
+        social.Update(.5F, nearby);
+        Check(social.count == 2, "the pair keeps talking for the whole conversation");
+    }
+    social.Update(1, nearby);
+    Check(!social.count && social.cooldown >= 45, "conversation ends and leaves a quiet interval");
     social.Reset();
-    begin({{1, {0, 0}}, {2, {1000, 0}}});
-    Check(!social.count, "no movement orders to pull distant companions together");
+    std::vector<SocialCandidate> apart{{1, {0, 0}}, {2, {1000, 0}}};
+    begin(apart);
+    Check(social.count == 2 && social.gathering && social.Listener(1) == 0 && social.Listener(2) == 0,
+          "distant companions walk over before talking");
+    const auto walker = social.Walker(), host = social.Partner(walker);
+    Check(walker && host && !social.Holds(walker) && social.Holds(host),
+          "the initiator walks while the partner waits");
+    Check(!social.TakeGesture(walker) && !social.TakeGesture(host), "no gestures across the area");
+    apart[walker == 1 ? 0 : 1].settled = false;
+    apart[walker == 1 ? 0 : 1].position.x = walker == 1 ? 600.0F : 400.0F;
+    social.Update(10, apart);
+    Check(social.gathering, "the walker's own movement does not end the meeting");
+    apart[walker == 1 ? 0 : 1].position.x = walker == 1 ? 870.0F : 130.0F;
+    social.Update(.25F, apart);
+    Check(social.count == 2 && !social.gathering && social.Listener(walker) == host,
+          "arrival starts the conversation");
+    social.Reset();
+    begin({{1, {0, 0}}, {2, {2500, 0}}});
+    Check(!social.count, "companions resting far apart are not summoned across the area");
+    social.Reset();
+    apart = {{1, {0, 0}}, {2, {1000, 0}}};
+    begin(apart);
+    social.Update(SocialPlanner::gatherTimeout, apart);
+    Check(!social.count && social.cooldown >= 10, "a walker who never arrives gives up");
+    social.Reset();
+    begin(apart);
+    apart[social.Partner(social.Walker()) == 1 ? 0 : 1].settled = false;
+    social.Update(3.25F, apart);
+    Check(!social.count, "a partner who wanders off ends the meeting");
     social.Reset();
     begin({{1, {0, 0}, false}, {2, {80, 0}, false}});
     Check(!social.count, "walking actors are not stopped for gestures");
@@ -428,10 +488,14 @@ int main()
           "overlapping conversation positions remain well-defined");
     for (unsigned id = 1; id <= 100; ++id) {
         SocialPlanner pair;
-        pair.Update(3, {{id, {0, 0}}, {id + 1000, {400, 0}}});
-        Check(pair.count == 2, "exactly two eligible companions reliably start their first conversation");
+        const std::vector<SocialCandidate> two{{id, {0, 0}}, {id + 1000, {150, 0}}};
+        pair.Update(pair.cooldown, two);
+        Check(pair.count == 2 && !pair.gathering,
+              "exactly two eligible companions reliably start their first conversation");
         const auto first = pair.Speaker(), second = pair.Listener(first);
-        pair.Update(5, {{id, {0, 0}}, {id + 1000, {400, 0}}});
+        for (int i = 0; i < 400 && !pair.pending[1]; ++i) {
+            pair.Update(.25F, two);
+        }
         Check(pair.TakeGesture(first) && pair.TakeGesture(second),
               "slow script delivery preserves both participants queued gestures");
         Check(!pair.TakeGesture(first), "queued gesture is consumed only once");
@@ -439,12 +503,15 @@ int main()
         Check(!pair.TakeGesture(second), "cancelled pair cannot deliver stale gestures");
     }
     SocialPlanner visibility;
+    visibility.cooldown = 0;
     visibility.Update(3, {{1, {0, 0}}, {2, {50, 0}}, {3, {150, 0}}},
                       [](auto a, auto b) { return (a == 1 && b == 3) || (a == 3 && b == 1); });
     Check(visibility.Listener(1) == 3, "blocked nearest partner does not starve a visible alternative");
     visibility.Reset();
+    visibility.cooldown = 0;
     visibility.Update(3, {{1, {0, 0}}, {2, {80, 0}}}, [](auto, auto) { return false; });
-    Check(!visibility.count, "invisible companions are never paired through walls");
+    Check(visibility.gathering && !visibility.Listener(1) && !visibility.Listener(2),
+          "companions never talk through walls; one walks around first");
     for (int i = 0; i < 6; ++i) {
         Check(static_cast<int>(OrderMode(i)) == i,
               "all six displayed options map to their matching formation");

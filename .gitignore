@@ -10,6 +10,9 @@ __pycache__/
 *.tmp
 *.bak
 
+# Local assistant context, not project documentation.
+/CLAUDE.md
+
 # Regenerated staging outputs; ship source, settings and licensed assets.
 /package/Wayfarer.esp
 /package/SKSE/Plugins/Wayfarer.dll

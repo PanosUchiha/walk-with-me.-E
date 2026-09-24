@@ -5,13 +5,15 @@ Winged arrow by Lorc: https://game-icons.net/1x1/lorc/winged-arrow.html
 Campfire by Lorc: https://game-icons.net/1x1/lorc/campfire.html
 Teleport by Lorc: https://game-icons.net/1x1/lorc/teleport.html
 Viking shield by Delapouite: https://game-icons.net/1x1/delapouite/viking-shield.html
+Locked chest by Lorc: https://game-icons.net/1x1/lorc/locked-chest.html
 
 Licensed under Creative Commons Attribution 3.0 Unported (CC BY 3.0).
 License: https://creativecommons.org/licenses/by/3.0/
 Legal code: https://creativecommons.org/licenses/by/3.0/legalcode
 
 Changes: removed backgrounds, separated existing artwork into animation layers,
-recolored for the interface, and composed two shields for Companion. Animation
+recolored for the interface (the loot chest is tinted white or gold at runtime),
+and composed two shields for Companion. Animation
 and wheel geometry are produced by Walk With Me. No endorsement is implied.
 
 Optional command gestures use the user's installed First Person Interactions

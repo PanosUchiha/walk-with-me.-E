@@ -10,7 +10,7 @@ def write(name,path):
     text=f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="#ffffff" d="{path}"/></svg>'
     ET.fromstring(text)
     (target/(name+'.svg')).write_text(text,encoding='utf-8')
-write('natural',data('footsteps'));write('shield',data('shield'))
+write('natural',data('footsteps'));write('shield',data('shield'));write('loot',data('locked-chest'))
 parts=re.split(r'(?=M)',data('arrow'))[1:]
 assert len(parts)==3
 for name,path in zip(('arrow','wing-a','wing-b'),parts):write(name,path)
@@ -36,4 +36,4 @@ for inset,coverage in [(-2,.04),(-1.5,.13),(-1,.30),(-.5,.53),(0,.76),(.5,.92),(
     layers.append(f'<path fill="#ffffff" fill-opacity="{opacity:.5f}" d="{sector(inset)}"/>')
     previous=coverage
 (target/'wheel-slice.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'+''.join(layers)+'</svg>',encoding='utf-8')
-print('Built eight icon layers and rounded wheel slice:',sum(f.stat().st_size for f in target.glob('*.svg')),'bytes')
+print('Built nine icon layers and rounded wheel slice:',sum(f.stat().st_size for f in target.glob('*.svg')),'bytes')

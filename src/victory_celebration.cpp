@@ -154,14 +154,19 @@ namespace
 #endif
     }
 
-    bool StopCelebration(RE::Actor& actor, RE::TESIdleForm* idle)
+    bool StopCelebration(RE::Actor& actor, RE::TESIdleForm* idle, bool combatInterrupt = false)
     {
         Wayfarer::Victory::Animation::Select(actor.GetFormID(), false);
 
-        if (!actor.Is3DLoaded() || actor.IsDead() || !OwnsIdle(actor, idle)) {
+        if (!actor.Is3DLoaded() || actor.IsDead() || !idle) {
             return true;
         }
-        if (InBattle(actor) || actor.GetCurrentScene() || actor.GetOccupiedFurniture().get() ||
+        auto* process = actor.GetActorRuntimeData().currentProcess;
+        if (!process || !process->middleHigh) return true;
+        // A queued special idle may have no lastIdlePlayed yet. Stop that
+        // accepted request too, but never cancel a different system's idle.
+        if (process->middleHigh->lastIdlePlayed && !OwnsIdle(actor, idle)) return true;
+        if ((!combatInterrupt && InBattle(actor)) || actor.GetCurrentScene() || actor.GetOccupiedFurniture().get() ||
             Speaking(actor)) {
             return false;
         }
@@ -219,7 +224,7 @@ namespace Wayfarer
     void FormationController::InitializeVictoryEvents()
     {
         BattleEvents::Get().Register();
-        logger::info("[Victory] Revision 5: minimum={} enemies; party-wide varied recovery; shoulder={}; "
+        logger::info("[Victory] Revision 12: in-place sheathed hold; mod-aware post-combat voices; minimum={} enemies; custom clips={}; "
                      "start window={:.1f}s",
                      Victory::Encounter::minimumEnemies, Victory::Animation::Available(),
                      Victory::startWindowSeconds);
@@ -234,14 +239,106 @@ namespace Wayfarer
         aliasSyncBusy = busy;
     }
 
-    void FormationController::UpdateVictoryCleanup()
+    void FormationController::QueueVictoryCleanup(VictoryReaction reaction, bool combat)
+    {
+        Victory::Animation::Select(reaction.actorID, false);
+        if (!reaction.started) return;
+        if (std::any_of(victoryCleanup.begin(), victoryCleanup.end(), [&](const auto& old) {
+            return old.actorID == reaction.actorID;
+        })) return;
+        reaction.cleanupElapsed = 0;
+        reaction.cleanupStopped = !reaction.started;
+        reaction.combatRestore = combat;
+        if (auto actor = reaction.actor.get(); actor && reaction.started) {
+            reaction.cleanupStopped = StopCelebration(*actor, reaction.idle, combat);
+        }
+        victoryCleanup.push_back(reaction);
+    }
+
+    bool FormationController::VictoryHoldState(RE::Actor* actor, std::int32_t ticket, std::int32_t state)
+    {
+        std::lock_guard lock(stateMutex);
+        if (!actor || actor->IsPlayerRef()) return false;
+        for (auto& reaction : victoryReactions) {
+            if (reaction.actorID == actor->GetFormID())
+                return reaction.hold.Poll(ticket, state, reaction.started, reaction.windowElapsed);
+        }
+        return false;
+    }
+
+    bool RequestVictoryVoice(RE::Actor& actor, RE::PlayerCharacter& player)
+    {
+        if (Speaking(actor) || InBattle(actor) || InBattle(player)) return false;
+        // Custom followers often have no responses in the vanilla topic.
+        // Discover their actual CombatToNormal topics, including unnamed ones.
+        static const auto topics = [] {
+            std::vector<RE::TESTopic*> result;
+            if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                for (auto* entry : data->GetFormArray<RE::TESTopic>()) {
+                    if (entry && entry->data.subtype == RE::DIALOGUE_DATA::Subtype::kCombatToNormal)
+                        result.push_back(entry);
+                }
+            }
+            std::sort(result.begin(), result.end(), [](auto* a, auto* b) {
+                return a->GetFormID() > b->GetFormID();
+            });
+            logger::info("[Victory] Found {} loaded CombatToNormal voice topics", result.size());
+            return result;
+        }();
+        RE::TESTopic* topic = nullptr;
+        unsigned running = 0;
+        for (auto* candidate : topics) {
+            if (!candidate->ownerQuest || !candidate->ownerQuest->IsRunning() || !candidate->topicInfos)
+                continue;
+            ++running;
+            for (std::uint32_t i = 0; i < candidate->numTopicInfos; ++i) {
+                auto* info = candidate->topicInfos[i];
+                if (!info) continue;
+                using Flags = RE::TOPIC_INFO_DATA::TOPIC_INFO_FLAGS;
+                if (info->data.flags.any(Flags::kStartSceneOnEnd, Flags::kEndRunningScene,
+                    Flags::kIsForceGreet, Flags::kRequiresPlayerActivation) ||
+                    (info->saidOnce && info->data.flags.all(Flags::kSayOnce))) continue;
+                if (info->objConditions.IsTrue(&actor, &player)) {
+                    topic = candidate;
+                    break;
+                }
+            }
+            if (topic) break;
+        }
+        if (!topic) {
+            logger::info("[Victory] {} voice skipped: no matching response in {} running post-combat topics",
+                actor.GetName(), running);
+            return false;
+        }
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+        const bool dispatched = vm && vm->DispatchStaticCall(
+            RE::BSFixedString("WayfarerVictoryVoice"), RE::BSFixedString("Bark"),
+            RE::MakeFunctionArguments(static_cast<RE::Actor*>(&actor), static_cast<RE::TESTopic*>(topic)), callback);
+        logger::info("[Victory] {} post-combat voice topic={:08X} name={} dispatched={}", actor.GetName(), topic->GetFormID(), topic->GetFormEditorID(), dispatched);
+        return dispatched;
+    }
+
+    void FormationController::UpdateVictoryCleanup(float dt)
     {
         if (auto* ui = RE::UI::GetSingleton(); ui && ui->GameIsPaused()) {
             return;
         }
-        std::erase_if(victoryCleanup, [](const VictoryReaction& reaction) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
+        std::erase_if(victoryCleanup, [&](VictoryReaction& reaction) {
             auto actor = reaction.actor.get();
-            return !actor || StopCelebration(*actor, reaction.idle);
+            if (!actor || actor->IsDead() || !actor->Is3DLoaded() || actor->IsPlayerRef()) return true;
+            reaction.cleanupElapsed += dt;
+            const bool combat = reaction.combatRestore || InBattle(*player) || InBattle(*actor);
+            if (!reaction.cleanupStopped) {
+                reaction.cleanupStopped = StopCelebration(*actor, reaction.idle, combat);
+                if (!reaction.cleanupStopped) return reaction.cleanupElapsed > 3.0F;
+            }
+            if (actor->GetCurrentScene() || actor->GetOccupiedFurniture().get() || Speaking(*actor))
+                return reaction.cleanupElapsed > 3.0F;
+            actor->EvaluatePackage();
+            return true;
         });
     }
 
@@ -250,10 +347,7 @@ namespace Wayfarer
         Victory::Animation::Clear();
         if (stopAnimations) {
             for (const auto& reaction : victoryReactions) {
-                if (auto actor = reaction.actor.get();
-                    actor && reaction.started && !StopCelebration(*actor, reaction.idle)) {
-                    victoryCleanup.push_back(reaction);
-                }
+                QueueVictoryCleanup(reaction);
             }
         }
         else {
@@ -263,6 +357,7 @@ namespace Wayfarer
         victoryEncounter.Reset();
         victoryEnemies.clear();
         victoryScanTimer = 0;
+        victoryVoiceRequested = false;
         BattleEvents::Get().Clear();
     }
 
@@ -299,10 +394,9 @@ namespace Wayfarer
         if (!HumanoidRig(actor)) {
             return "not a humanoid animation rig";
         }
-        const auto offset = actor.GetPosition() - player.GetPosition();
-        if (offset.Length() > 900.0F || std::abs(offset.z) > 180.0F) {
-            return "too far from player";
-        }
+        // UsabilityRejection already enforces the configured release distance.
+        // A tighter celebration radius/height gate made followers approach the
+        // player before reacting, even though their battle position was safe.
         if (starting) {
 
             const auto* alias = GetRefAlias(questCache, FollowerAlias(managed.at(id).slot));
@@ -314,13 +408,11 @@ namespace Wayfarer
                     return "previous reaction cleanup pending";
                 }
             }
-            bool driven = false;
-            actor.GetGraphVariableBool("bAnimationDriven", driven);
+            // bAnimationDriven also remains set for ordinary follower idles.
+            // It is not proof of exclusive ownership: scene, speech, furniture,
+            // unsafe-state, movement and alias checks above/below protect start.
             RE::NiPoint3 velocity{};
             actor.GetLinearVelocity(velocity);
-            if (driven) {
-                return "another animation owns the actor";
-            }
             if (velocity.Length() > 30.0F) {
                 return "companion still moving";
             }
@@ -458,10 +550,7 @@ namespace Wayfarer
                 logger::info("[Victory] Reaction cancelled: actor={:08X} started={} partyFighting={} "
                              "playerReady={} playerSpeed={:.0f}",
                              reaction.actorID, reaction.started, fighting, canCelebrate, velocity.Length());
-                if (auto actor = reaction.actor.get();
-                    actor && reaction.started && !StopCelebration(*actor, reaction.idle)) {
-                    victoryCleanup.push_back(reaction);
-                }
+                QueueVictoryCleanup(reaction, fighting);
                 return true;
             });
         }
@@ -470,28 +559,31 @@ namespace Wayfarer
         if (outcome != Victory::Result::None) {
             if (outcome == Victory::Result::Victory) {
                 ++victorySequence;
+                victoryVoiceRequested = false;
                 std::sort(followers.begin(), followers.end(),
                           [](const auto& a, const auto& b) { return a->GetFormID() < b->GetFormID(); });
-                if (!followers.empty()) {
-                    std::rotate(followers.begin(),
-                                followers.begin() + (victorySequence - 1) % followers.size(),
-                                followers.end());
-                }
                 unsigned reactionIndex = 0;
                 for (const auto& actor : followers) {
-                    if (!HumanoidRig(*actor) ||
-                        (actor->GetPosition() - player.GetPosition()).Length() > 900) {
-                        logger::info("[Victory] {} not queued: incompatible rig or outside reaction range",
-                                     actor->GetName());
+                    if (!HumanoidRig(*actor)) {
+                        auto* race = actor->GetRace();
+                        auto* npc = actor->GetActorBase();
+                        const auto* graph = race && npc
+                            ? race->behaviorGraphs[npc->GetSex() == RE::SEXES::kFemale ? 1 : 0].GetModel()
+                            : nullptr;
+                        logger::info("[Victory] {} not queued: incompatible rig; race={:08X} graph={}",
+                                     actor->GetName(), race ? race->GetFormID() : 0, graph ? graph : "unknown");
                         continue;
                     }
-                    const auto variation = Victory::PartyVariation(reactionIndex++, victorySequence);
+                    // React at the battle position within normal follower
+                    // eligibility range; do not require arrival near the player.
+                    const auto variation = Victory::PartyVariation(reactionIndex++, victorySequence - 1);
 
                     VictoryReaction reaction;
                     reaction.actor = actor->GetHandle();
                     reaction.actorID = actor->GetFormID();
                     reaction.delay = .4F + (variation % 7) * .1F;
                     reaction.variation = variation;
+                    reaction.hold.ticket = static_cast<std::int32_t>((GetTickCount64() % 0x7FFFFFFE) + 1);
                     reaction.queuedAtAliasSync = completedAliasSyncs;
                     victoryReactions.push_back(std::move(reaction));
                 }
@@ -510,7 +602,7 @@ namespace Wayfarer
 
         std::erase_if(victoryReactions, [&](VictoryReaction& reaction) {
             auto finish = [&] {
-                Victory::Animation::Select(reaction.actorID, false);
+                QueueVictoryCleanup(reaction);
                 return true;
             };
             auto actor = reaction.actor.get();
@@ -518,8 +610,13 @@ namespace Wayfarer
                 return finish();
             }
             reaction.elapsed += dt;
+            reaction.windowElapsed += dt;
+            if (reaction.hold.released) {
+                logger::info("[Victory] {} reaction cancelled: in-place hold released", actor->GetName());
+                return finish();
+            }
             if (!reaction.started) {
-                if (reaction.elapsed > Victory::startWindowSeconds) {
+                if (Victory::StartExpired(reaction.windowElapsed)) {
                     logger::info("[Victory] {} expired before playback: {}", actor->GetName(),
                                  reaction.lastReason);
                     return finish();
@@ -539,15 +636,39 @@ namespace Wayfarer
                                     ? "player moving too quickly; retaining pending reaction"
                                     : "player state or controls not ready; retaining pending reaction");
                 }
-                if (auto reason = VictoryActorRejection(*actor, player, true); !reason.empty()) {
+                if (auto reason = VictoryActorRejection(*actor, player, false); !reason.empty()) {
                     return wait(std::move(reason));
                 }
-                if (!Victory::HandoffComplete(reaction.queuedAtAliasSync, completedAliasSyncs)) {
-                    return wait("waiting for first completed movement cleanup pass");
-                }
                 reaction.equipment = CelebrationEquipment(*actor);
-                if (reaction.armedPhaseDone && reaction.equipment != Victory::Equipment::Sheathed) {
-                    return wait("armed reaction finished; waiting for sheathed recovery");
+                if (!Victory::NaturallySheathed(CelebrationEquipment(player), reaction.equipment)) {
+                    reaction.sheathSettled = 0;
+                    return wait("waiting for player and companion to sheath naturally (10-second window)");
+                }
+                // Stop the vanilla/NFF return-to-player movement at the spot
+                // where this actor sheathes, before the alias cleanup wait.
+                if (!reaction.hold.requested) {
+                    if (actor->GetActorRuntimeData().boolFlags.all(RE::Actor::BOOL_FLAGS::kMovementBlocked))
+                        return wait("movement already blocked by another system");
+                    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+                    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+                    reaction.hold.requested = true;
+                    if (!vm || !vm->DispatchStaticCall(RE::BSFixedString("WayfarerVictoryVoice"),
+                        RE::BSFixedString("Hold"), RE::MakeFunctionArguments(static_cast<RE::Actor*>(actor.get()),
+                            std::int32_t{reaction.hold.ticket}), callback)) {
+                        reaction.hold.requested = false;
+                        return wait("in-place hold helper unavailable");
+                    }
+                    logger::info("[Victory] {} holding at sheath position ({:.0f},{:.0f},{:.0f})",
+                        actor->GetName(), actor->GetPosition().x, actor->GetPosition().y, actor->GetPosition().z);
+                }
+                if (!reaction.hold.ready) return wait("waiting for in-place hold acknowledgement");
+                if (!Victory::HandoffComplete(reaction.queuedAtAliasSync, completedAliasSyncs))
+                    return wait("waiting for first completed movement cleanup pass while held in place");
+                reaction.sheathSettled += dt;
+                if (!Victory::SheatheSettled(reaction.sheathSettled))
+                    return wait("waiting for stable sheathed graph before selecting animation");
+                if (auto reason = VictoryActorRejection(*actor, player, true); !reason.empty()) {
+                    return wait(std::move(reason));
                 }
                 const bool shoulderAvailable = Victory::Animation::Available();
                 const auto choice =
@@ -566,17 +687,9 @@ namespace Wayfarer
                 }
                 reaction.nextAttempt = reaction.elapsed + Victory::retrySeconds;
                 ++reaction.startAttempts;
-                Victory::Animation::Select(reaction.actorID, choice.shoulder);
+                Victory::Animation::Select(reaction.actorID, choice.shoulder, choice.customClip);
                 if (!PlayCelebration(*actor, reaction.idle)) {
                     Victory::Animation::Select(reaction.actorID, false);
-                    if (reaction.equipment == Victory::Equipment::OtherDrawn) {
-                        // The native armed-idle branch is equipment dependent.
-                        // A rejected optional pause must not use up recovery's window.
-                        reaction.armedPhaseDone = true;
-                        reaction.elapsed = reaction.nextAttempt = 0;
-                        reaction.startAttempts = 0;
-                        return wait("native armed pause rejected; waiting for sheathed recovery");
-                    }
                     return wait("engine rejected idle start; retrying within window");
                 }
                 reaction.duration = choice.seconds;
@@ -589,19 +702,6 @@ namespace Wayfarer
                              choice.armed);
                 return false;
             }
-            auto sheathedPhase = [&] {
-                Victory::Animation::Select(reaction.actorID, false);
-                reaction.armedPhaseDone = true;
-                reaction.started = false;
-                reaction.idle = nullptr;
-                reaction.elapsed = reaction.nextAttempt = 0;
-                reaction.startAttempts = 0;
-                reaction.lastReason.clear();
-                return false;
-            };
-            const bool wasArmed = reaction.equipment == Victory::Equipment::Sword ||
-                                  reaction.equipment == Victory::Equipment::Greatsword ||
-                                  reaction.equipment == Victory::Equipment::OtherDrawn;
             const bool ownsIdle = OwnsIdle(*actor, reaction.idle);
             if (reaction.shoulderSelected && !reaction.clipChecked && reaction.elapsed >= .5F) {
                 logger::info("[Victory] {} shoulder selection reached OAR={} idleOwned={}", actor->GetName(),
@@ -610,42 +710,41 @@ namespace Wayfarer
             }
             const auto rejection = VictoryActorRejection(*actor, player, false);
             const bool equipmentChanged = CelebrationEquipment(*actor) != reaction.equipment;
-            if (rejection.empty() && equipmentChanged && wasArmed) {
-                if (!StopCelebration(*actor, reaction.idle)) {
-                    victoryCleanup.push_back(reaction);
-                }
-                return sheathedPhase();
-            }
-            if (!ownsIdle && rejection.empty() && !equipmentChanged &&
-                Victory::WaitForIdleOwnership(reaction.elapsed)) {
-                return false; // PlayIdle queues graph work; do not clear OAR selection next frame.
-            }
-            if (!ownsIdle && rejection.empty() && !equipmentChanged &&
-                reaction.equipment != Victory::Equipment::OtherDrawn &&
-                Victory::RetryEarlyIdleLoss(reaction.elapsed, reaction.startAttempts)) {
-                Victory::Animation::Select(reaction.actorID, false);
-                logger::info("[Victory] {} lost idle before it settled; retry {}/3", actor->GetName(),
-                             reaction.startAttempts + 1);
+            if (reaction.shoulderSelected && rejection.empty() && !equipmentChanged &&
+                Victory::NaturallySheathed(CelebrationEquipment(player), reaction.equipment) &&
+                Victory::RetryUnobservedClip(Victory::Animation::WasObserved(reaction.actorID),
+                    reaction.elapsed, reaction.windowElapsed, reaction.playbackRetries)) {
+                // PlayIdle accepting a request does not guarantee graph entry.
+                // Retry once only when OAR never saw this selected custom clip.
+                StopCelebration(*actor, reaction.idle);
+                ++reaction.playbackRetries;
                 reaction.started = false;
-                reaction.nextAttempt = reaction.elapsed + Victory::retrySeconds;
+                reaction.elapsed = reaction.windowElapsed;
+                reaction.nextAttempt = 0;
+                logger::info("[Victory] {} custom clip never reached OAR; retrying once within original window",
+                             actor->GetName());
                 return false;
             }
-            if (!ownsIdle) {
-                logger::info("[Victory] {} idle ownership ended after {:.2f}s; engine acceptance does not "
-                             "confirm visible playback",
-                             actor->GetName(), reaction.elapsed);
-                return wasArmed && rejection.empty() ? sheathedPhase() : finish();
-            }
-            if (reaction.elapsed >= reaction.duration || !rejection.empty() || equipmentChanged) {
+            // lastIdlePlayed is not a reliable playback-lifetime signal here:
+            // r7 logs show OAR observed the selected clip while this pointer
+            // already differed. Keep the one-shot lease until its real duration
+            // or a concrete interruption, never merely because this field differs.
+            if (Victory::ReactionComplete(reaction.elapsed, reaction.duration,
+                                          !rejection.empty(), equipmentChanged)) {
                 logger::info("[Victory] {} reaction ended after {:.2f}s: {}", actor->GetName(),
                              reaction.elapsed,
                              !rejection.empty() ? rejection
                              : equipmentChanged ? "equipment changed or drawing/sheathing"
                                                 : "duration complete");
-                if (!StopCelebration(*actor, reaction.idle)) {
-                    victoryCleanup.push_back(reaction);
+                // Speak after the gesture so dialogue idles cannot replace its
+                // OAR clip. Only one requested bark per encounter.
+                if (rejection.empty() && !equipmentChanged && reaction.elapsed >= reaction.duration &&
+                    !victoryVoiceRequested && !player.GetCurrentScene()) {
+                    // Release our idle before Papyrus starts the voice response.
+                    QueueVictoryCleanup(reaction);
+                    victoryVoiceRequested = RequestVictoryVoice(*actor, player);
                 }
-                return wasArmed && rejection.empty() ? sheathedPhase() : finish();
+                return finish();
             }
             return false;
         });

@@ -6,9 +6,16 @@
 
 namespace Wayfarer::HandHolding
 {
+    enum class Method
+    {
+        Tether,
+        Classic
+    };
+
     struct Tuning
     {
         bool enabled{};
+        Method method{Method::Classic};
         std::string partner, partnerName;
         float delay{1.0F}, connectDistance{90.0F}, releaseDistance{120.0F};
         // Palm anchor in hand-local game units. The skeleton's hands are mirrored,
@@ -16,7 +23,7 @@ namespace Wayfarer::HandHolding
         // because the correct value depends on the body and hand meshes in use.
         float palmX{0.0F}, palmY{-2.35F}, palmZ{5.0F};
         // Wrist separation the constraint is allowed to close when it is created.
-        float gripGap{20.0F};
+        float gripGap{45.0F};
     };
 
     enum class Phase

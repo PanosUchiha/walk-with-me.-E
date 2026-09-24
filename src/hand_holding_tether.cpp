@@ -6,11 +6,11 @@
 #include "command_gesture.h"
 #include "engine_compatibility.h"
 #include "formation_math.h"
-#include "hand_holding.h"
+#include "hand_holding_backends.h"
 #include "tether_clasp.h"
 #include "tether_session.h"
 
-namespace Wayfarer::HandHolding
+namespace Wayfarer::HandHolding::Tether
 {
     namespace
     {
@@ -26,14 +26,10 @@ namespace Wayfarer::HandHolding
         RE::NiPointer<RE::NiAVObject> playerRoot, followerRoot;
         std::int32_t token = static_cast<std::int32_t>(GetTickCount64() & 0x3fffffff);
         RE::FormID playerCell{}, followerCell{}, world{};
-        bool playerInterior{}, followerInterior{}, gripLeft{}, gripReady{}, bodiesReady{};
+        bool playerInterior{}, followerInterior{}, gripLeft{}, gripReady{}, bodiesReady{}, facingReady{};
         RE::NiPoint3 lastPlayer{}, lastFollower{};
         float pendingTime{}, traceTime{}, retryTime{};
-        float acquireTime{}, contactTime{}, cooldown{};
-        float GripGap()
-        {
-            return TetherGripGap(acquireTime, tuning.gripGap, tetherGripGapRelaxed, tetherGripGapPatience);
-        }
+        float acquireTime{}, approachTime{}, handoffTime{}, cooldown{};
         RE::NiAVObject* Hand(RE::Actor& actor, bool left)
         {
             auto* root = actor.Get3D(false);
@@ -82,14 +78,14 @@ namespace Wayfarer::HandHolding
             }
             arrival.elapsed = 0;
             if (session.started && !session.cancelled) {
-                logger::info("[HandHolding/TETHER] Session {} release {:08X}: {}", token, handoff.actor,
+                logger::info("[HandHolding/TETHER] Session {} release {:08X}: {}", token, approach.actor,
                              reason);
                 cooldown = failed ? 4 : 1.5F;
             }
             session.Cancel();
             state.Reset();
             approach = {};
-            gripReady = bodiesReady = false;
+            gripReady = bodiesReady = facingReady = false;
             Pump();
         }
         struct Completion final : RE::BSScript::IStackCallbackFunctor
@@ -100,16 +96,27 @@ namespace Wayfarer::HandHolding
             void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
             void operator()(RE::BSScript::Variable result) override
             {
-                const bool success = result.IsBool() && result.GetBool();
+                // TryStep: 0 failed, 1 completed, 2 deferred without mutation.
+                const auto status = result.IsInt() ? result.GetSInt() : 0;
+                const bool success = status == 1;
                 if (auto* tasks = SKSE::GetTaskInterface()) {
-                    tasks->AddTask([value = ticket, op = operation, success] {
+                    tasks->AddTask([value = ticket, op = operation, success, status] {
                         std::lock_guard lock(mutex);
+                        if (value == token && status == 2 && session.Defer(op)) {
+                            logger::info("[HandHolding/TETHER] Session {} operation {} deferred after "
+                                         "{:.3f}s; retrying fresh pose",
+                                         value, static_cast<int>(op), pendingTime);
+                            pendingTime = 0;
+                            retryTime = .05F;
+                            return;
+                        }
                         if (value != token || !session.Complete(op, success)) {
                             return;
                         }
+                        logger::info("[HandHolding/TETHER] Session {} operation {} completed={} "
+                                     "callback={:.3f}s setup={:.3f}s",
+                                     value, static_cast<int>(op), success, pendingTime, acquireTime);
                         pendingTime = 0;
-                        logger::info("[HandHolding/TETHER] Session {} operation {} completed={}", value,
-                                     static_cast<int>(op), success);
                         if (!success) {
                             Clasp::Clear();
                             state.Reset();
@@ -120,8 +127,15 @@ namespace Wayfarer::HandHolding
                                 retryTime = 1;
                             }
                         }
-                        if (session.connected) {
-                            logger::info("[HandHolding/TETHER] Physics grip connected; KEI997 / MIT");
+                        if (op == TetherOp::Connect && session.connected) {
+                            // The hands are already joined. Alias cleanup only
+                            // gates the movement controller, never the grip.
+                            handoff.Start(approach.actor, token);
+                            handoffTime = 0;
+                            logger::info(
+                                "[HandHolding/TETHER] Physics grip connected; approach={:.3f}s "
+                                "setup={:.3f}s total={:.3f}s; movement handoff follows; KEI997 / MIT",
+                                approachTime, acquireTime, approachTime + acquireTime);
                         }
                         Pump();
                     });
@@ -147,9 +161,8 @@ namespace Wayfarer::HandHolding
             if (!op || retryTime > 0) {
                 return;
             }
-            // Each operation waits only on what it actually depends on. The ragdoll
-            // bodies are added while the pair is still turning into place, so the
-            // constraint is the single Papyrus round trip left after contact.
+            // A connected pair may already be walking when cleanup finishes.
+            // Only the old package's completed cleanup gates offset movement.
             if ((NeedsHandoff(*op) && !handoff.ready) || (NeedsHeading(*op) && !bodiesReady) ||
                 (NeedsGrip(*op) && !gripReady)) {
                 return;
@@ -171,7 +184,7 @@ namespace Wayfarer::HandHolding
                 static_cast<RE::Actor*>(follower.get()), bool{gripLeft}, float{tuning.palmX},
                 float{tuning.palmY}, float{tuning.palmZ}, float{tuning.palmX}, float{tuning.palmY},
                 float{tuning.palmZ});
-            if (!vm->DispatchStaticCall("WayfarerTether"sv, "Step"sv, args, callback)) {
+            if (!vm->DispatchStaticCall("WayfarerTether"sv, "TryStep"sv, args, callback)) {
                 logger::error(
                     "[HandHolding/TETHER] Cannot dispatch operation {}; install matching WayfarerTether.pex",
                     static_cast<int>(*op));
@@ -233,13 +246,23 @@ namespace Wayfarer::HandHolding
         }
         logger::info("[HandHolding] Revision 18: authored clasp and completed-cleanup handoff; TETHER by "
                      "KEI997 (MIT)");
+        logger::info(
+            "[HandHolding/TETHER] Responsive-facing r1: reference rotation before offset; fresh-pose gates");
+        logger::info("[HandHolding/TETHER] Latency r2: priority cleanup and retryable pose validation");
+        logger::info(
+            "[HandHolding/TETHER] Direct grip r4: connect at arrival before movement handoff; no dwell");
         logger::info("[HandHolding/Clasp] Required OAR pose assets: {}",
-                     Clasp::Available() ? "available" : "missing; grip disabled");
+                     Clasp::Available() ? "available" : "missing; TETHER grip disabled (Classic available)");
     }
     void Reset()
     {
         std::lock_guard lock(mutex);
         Release("controller reset");
+    }
+    bool CleanupPending()
+    {
+        std::lock_guard lock(mutex);
+        return session.started || handoff.actor != 0;
     }
     void OnGameLoaded()
     {
@@ -258,9 +281,9 @@ namespace Wayfarer::HandHolding
         followerHandle = {};
         playerRoot.reset();
         followerRoot.reset();
-        pendingTime = retryTime = traceTime = acquireTime = contactTime = 0;
+        pendingTime = retryTime = traceTime = acquireTime = approachTime = handoffTime = 0;
         cooldown = 3;
-        gripReady = bodiesReady = false;
+        gripReady = bodiesReady = facingReady = false;
         logger::info("[HandHolding/TETHER] New game/load: invalidated previous physics session");
     }
     void ReleaseActor(RE::FormID actor)
@@ -289,14 +312,15 @@ namespace Wayfarer::HandHolding
         }
         const bool alreadyComplete = handoff.cleanupComplete;
         if (handoff.RecordCleanup(actor, ticket, aliasEmpty) && !alreadyComplete) {
-            logger::info("[HandHolding/TETHER] Session {} script cleanup complete; packageReleased={}",
-                         ticket, packageReleased);
+            logger::info("[HandHolding/TETHER] Session {} script cleanup complete; packageReleased={} "
+                         "afterGrip={:.3f}s",
+                         ticket, packageReleased, handoffTime);
         }
         if (!handoff.ready && !session.cancelled &&
             handoff.Confirm(actor, ticket, aliasEmpty, packageReleased)) {
             logger::info("[HandHolding/TETHER] Session {} WWM alias cleanup acknowledged", token);
         }
-        // Next validated frame starts setup; never start it on the Papyrus thread.
+        // Next validated frame starts offset; never start it on the Papyrus thread.
     }
     bool HandoffCleanupFinished(RE::FormID actor, std::int32_t ticket)
     {
@@ -366,7 +390,8 @@ namespace Wayfarer::HandHolding
         if (operation == 7) {
             return follower && follower->GetHandle() == followerHandle ? 1 : 2;
         }
-        if (!p || !f || !handoff.ready || DialogueActive() || Rejection(*player) || Rejection(*follower)) {
+        if (!p || !f || (NeedsHandoff(static_cast<TetherOp>(operation)) && !handoff.ready) ||
+            DialogueActive() || Rejection(*player) || Rejection(*follower)) {
             return 0;
         }
         auto* camera = RE::PlayerCamera::GetSingleton();
@@ -389,10 +414,9 @@ namespace Wayfarer::HandHolding
         const float heading = std::remainder(follower->GetAngleZ() - player->GetAngleZ(), 6.283185307F);
         const int side = gripLeft ? -1 : 1;
         if (operation == 6) {
-            return TetherNear(delta.Length(), delta.z, visible, 100) && std::isfinite(velocity.Length()) &&
-                           velocity.Length() <= 15 && lateral * side >= 15
+            return session.connected && TetherNear(delta.Length(), delta.z, visible, tuning.releaseDistance)
                        ? 1
-                       : 0;
+                       : 3;
         }
         // The ragdoll bodies are created once the follower has turned into place.
         // Only the constraint needs the palms already together, so the last-resort
@@ -402,13 +426,13 @@ namespace Wayfarer::HandHolding
                            std::isfinite(velocity.Length()) && velocity.Length() <= 15 &&
                            TetherHeadingSettled(heading, lateral, side, followerVelocity.Length())
                        ? 1
-                       : 0;
+                       : 3;
         }
         return TetherAlignedGrip(delta.Length(), delta.z, WristGap(*player, *follower, gripLeft), visible,
                                  tuning.connectDistance, lateral, side, heading, velocity.Length(),
-                                 followerVelocity.Length(), GripGap())
+                                 followerVelocity.Length(), tuning.gripGap)
                    ? 1
-                   : 0;
+                   : 3;
     }
 
     void UpdatePartner(RE::PlayerCharacter& player, RE::Actor* partner, float dt, const TravelNavigation&)
@@ -490,16 +514,22 @@ namespace Wayfarer::HandHolding
             lastFollower = other;
             approach.velocity = {velocity.x, velocity.y, 0};
             approach.heading = player.GetAngleZ();
-            if (session.offset) {
-                Clasp::Select(player.GetFormID(), partner->GetFormID(), gripLeft);
-            }
+            Clasp::Select(player.GetFormID(), partner->GetFormID(), gripLeft);
             if (session.connected) {
+                if (!session.offset) {
+                    handoffTime += dt;
+                    if (handoffTime > 8) {
+                        Release("movement handoff timed out after grip", true);
+                        return;
+                    }
+                }
                 if (traceTime >= 1) {
                     logger::info("[HandHolding/TETHER] Held {:08X}: gap={:.1f} wrist={:.1f} "
-                                 "playerSpeed={:.1f} nativeGait=true offsetMovement=true",
+                                 "playerSpeed={:.1f} nativeGait=true offsetMovement={} handoff={:.3f}s",
                                  partner->GetFormID(), distance, WristGap(player, *partner, gripLeft),
-                                 velocity.Length());
+                                 velocity.Length(), session.offset, handoffTime);
                 }
+                Pump();
             }
             else {
                 acquireTime += dt;
@@ -510,27 +540,37 @@ namespace Wayfarer::HandHolding
                 const float heading = std::remainder(partner->GetAngleZ() - player.GetAngleZ(), 6.283185307F);
                 const int side = gripLeft ? -1 : 1;
                 const bool settled = TetherHeadingSettled(heading, lateral, side, followerVelocity.Length());
-                // Only turn the stationary follower after WWM's package is gone,
-                // and before adding any physics bodies. This cannot steer normal travel.
-                if (session.offset && !session.player && !session.pending && !settled &&
-                    followerVelocity.Length() <= 20 && lateral * side >= 15 && std::abs(heading) > .2F) {
-                    Engine::SetHeading(*partner,
-                                       SeekHeading(partner->GetAngleZ(), player.GetAngleZ(), dt * .24F));
+                bool corrected = false;
+                // The travel destination now holds the arrival position. Align
+                // before physics exists; never rotate a live/pending body.
+                if (CanCorrectTetherFacing(session) &&
+                    TetherNear(distance, delta.z, visible, tuning.connectDistance) &&
+                    std::isfinite(velocity.Length()) && velocity.Length() <= 15 &&
+                    std::isfinite(player.GetAngleZ()) && std::isfinite(heading) &&
+                    std::isfinite(followerVelocity.Length()) && followerVelocity.Length() <= 130 &&
+                    lateral * side >= 15 && std::abs(heading) > .2F) {
+                    Engine::SetFacingImmediate(*partner, player.GetAngleZ());
+                    corrected = true;
+                    logger::info("[HandHolding/TETHER] Session {} facing corrected: before={:.2f} "
+                                 "after={:.2f} elapsed={:.2f}; awaiting fresh pose",
+                                 token, heading,
+                                 std::remainder(partner->GetAngleZ() - player.GetAngleZ(), 6.283185307F),
+                                 acquireTime);
                 }
-                // The turn is finished, so the bodies can go in while the palms are
-                // still closing. Once the player body exists the follower is no
-                // longer being turned, and a momentary wobble must not stall setup.
-                bodiesReady = session.offset && (settled || session.player);
+                // Bone world transforms may still describe the old pose in the
+                // correction frame. Never synthesize a zero error to skip this wait.
+                facingReady =
+                    !corrected && TetherFacingReady(heading, lateral, side, followerVelocity.Length());
+                bodiesReady = !corrected && settled;
                 const auto gap = WristGap(player, *partner, gripLeft);
-                const auto limit = GripGap();
+                const auto limit = tuning.gripGap;
                 const bool aligned =
-                    session.offset &&
+                    !corrected &&
                     TetherAlignedGrip(distance, delta.z, gap, visible, tuning.connectDistance, lateral, side,
                                       heading, velocity.Length(), followerVelocity.Length(), limit);
-                contactTime = aligned ? contactTime + dt : 0;
-                gripReady = contactTime >= .15F;
+                gripReady = aligned;
                 if (acquireTime > 8) {
-                    Release("close approach handoff timed out; leave contact area before retry", true);
+                    Release("direct grip timed out; leave contact area before retry", true);
                     return;
                 }
                 if (traceTime >= 1) {
@@ -538,8 +578,7 @@ namespace Wayfarer::HandHolding
                     logger::info("[HandHolding/TETHER] Session {} gate={} root={:.1f} wrist={:.1f}/{:.1f} "
                                  "height={:.1f} LOS={} package={:08X} heading={:.2f} followerSpeed={:.1f}",
                                  token,
-                                 !handoff.ready                         ? "alias cleanup"
-                                 : !session.offset                      ? "offset dispatch"
+                                 !facingReady                           ? "facing correction"
                                  : !bodiesReady                         ? "follower turn"
                                  : !session.player || !session.follower ? "ragdoll bodies"
                                  : !gripReady                           ? "grip proximity"
@@ -560,11 +599,13 @@ namespace Wayfarer::HandHolding
         const auto direction = ForwardFromYaw(player.GetAngleZ());
         const RE::NiPoint3 right{direction.y, -direction.x, 0};
         if (approach.actor != partner->GetFormID()) {
+            approachTime = 0;
             approach = {partner->GetFormID(), delta.Dot(right) < 0 ? -1 : 1,
                         SeekSpacing(tuning.connectDistance)};
             logger::info("[HandHolding/TETHER] {} close approach requested through WWM travel; side={}",
                          partner->GetName(), approach.side);
         }
+        approachTime += dt;
         // Keep the chosen side for this approach; crossing the centerline must not
         // move the target to the other side and send the follower back across us.
         approach.spacing = SeekSpacing(tuning.connectDistance);
@@ -606,22 +647,27 @@ namespace Wayfarer::HandHolding
         followerInterior = fCell->IsInteriorCell();
         lastPlayer = pos;
         lastFollower = other;
-        traceTime = acquireTime = contactTime = 0;
-        gripReady = bodiesReady = false;
+        traceTime = acquireTime = handoffTime = 0;
+        gripReady = bodiesReady = facingReady = false;
         separation = {};
         arrival.elapsed = 0;
-        handoff.Start(partner->GetFormID(), token);
+        approach.holdPosition = true;
+        approach.position = {other.x, other.y, other.z};
+        Clasp::Select(player.GetFormID(), partner->GetFormID(), gripLeft);
         session.Start();
-        logger::info("[HandHolding/TETHER] Session {} requesting package handoff for {:08X}; root={:.1f}",
-                     token, handoff.actor, distance);
+        logger::info(
+            "[HandHolding/TETHER] Session {} direct grip for {:08X}; root={:.1f}; holding arrival position",
+            token, partner->GetFormID(), distance);
     }
-    // Approach changes only the WWM destination/arrival tolerance. Once handoff
-    // starts, TETHER owns movement and the formation route is explicitly released.
+    // Keep the arrival destination until connection. Starting physics must not
+    // briefly replace it with the follower's ordinary formation spot.
     Approach GetApproach()
     {
         std::lock_guard lock(mutex);
-        return state.Searching() && !session.started && !arrival.failed && cooldown <= 0 ? approach
-                                                                                         : Approach{};
+        return state.Searching() && TetherRetainsApproach(session, handoff) && !arrival.failed &&
+                       cooldown <= 0
+                   ? approach
+                   : Approach{};
     }
     bool IsAttached(RE::FormID actor)
     {
@@ -633,4 +679,4 @@ namespace Wayfarer::HandHolding
     {
         return TetherFollowerSpeed(0, false);
     }
-} // namespace Wayfarer::HandHolding
+} // namespace Wayfarer::HandHolding::Tether

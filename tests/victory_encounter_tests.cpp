@@ -18,6 +18,40 @@ void Check(bool value, const char* message)
 
 int main()
 {
+    {
+        PositionHold hold{42};
+        Check(!hold.Poll(42, 1, false, 1), "unrequested hold cannot acknowledge");
+        hold.requested = true;
+        Check(hold.Poll(42, 0, false, 1) && !hold.ready, "request must wait for script acknowledgement");
+        Check(hold.Poll(42, 1, false, 2) && hold.ready, "script acknowledgement permits in-place playback");
+        Check(!hold.Poll(41, 2, false, 2) && !hold.released, "stale script cannot release a newer hold");
+        Check(!hold.Poll(42, 0, false, 10.01F), "pending hold releases at start deadline");
+        Check(hold.Poll(42, 1, true, 15), "started clip retains hold beyond start window");
+        Check(!hold.Poll(42, 2, true, 15) && !hold.ready, "script interruption releases hold and readiness");
+        Check(!hold.Poll(42, 1, true, 15), "released hold cannot be revived by a delayed acknowledgement");
+    }
+    Check(RetryUnobservedClip(false, 1.0F, 6.0F, 0), "accepted but unobserved clip gets one retry");
+    Check(!RetryUnobservedClip(true, 1.0F, 6.0F, 0), "observed clip never restarts");
+    Check(!RetryUnobservedClip(false, .99F, 6.0F, 0), "give asynchronous graph startup a full second");
+    Check(!RetryUnobservedClip(false, 1.0F, 10.0F, 0), "retry cannot extend the ten-second deadline");
+    Check(!RetryUnobservedClip(false, 1.0F, 6.0F, 1), "retry cannot loop indefinitely");
+    for (float elapsed : {.04F, .75F, .78F, 3.0F, 6.49F})
+        Check(!ReactionComplete(elapsed, 6.5F, false, false),
+              "accepted shoulder reaction survives the observed r6/r7 false ownership cutoffs");
+    Check(ReactionComplete(6.5F, 6.5F, false, false), "reaction ends at clip duration");
+    Check(ReactionComplete(.04F, 6.5F, true, false), "unsafe actor cancels immediately");
+    Check(!ReactionComplete(.04F, 6.5F, false, true) && ReactionComplete(.8F, 6.5F, false, true),
+          "brief startup equipment changes settle but persistent changes interrupt");
+    Check(!StartExpired(9.99F) && !StartExpired(10.0F) && StartExpired(10.01F),
+          "natural sheath opportunity expires after ten seconds");
+    for (auto gear : {Equipment::Sword, Equipment::Greatsword, Equipment::OtherDrawn,
+                     Equipment::EmptyHands, Equipment::Transition, Equipment::Unsupported}) {
+        Check(!NaturallySheathed(Equipment::Sheathed, gear), "armed or transitioning follower must wait");
+        Check(!NaturallySheathed(gear, Equipment::Sheathed), "armed or transitioning player must wait");
+    }
+    Check(NaturallySheathed(Equipment::Sheathed, Equipment::Sheathed), "both naturally sheathed permits playback");
+    Check(!SheatheSettled(.04F) && !SheatheSettled(.34F) && SheatheSettled(.36F),
+          "one-frame sheathed state cannot start playback before graph settlement");
     Check(!CancelReaction(false, false, false), "brief player movement preserves pending reactions");
     Check(!CancelReaction(false, false, true), "pending reaction can start after player settles");
     Check(CancelReaction(true, false, false), "player interruption still stops an active idle");
@@ -253,8 +287,8 @@ int main()
         for (std::uint32_t variant = 0; variant < 32; ++variant) {
             for (const auto gear : {Equipment::Sword, Equipment::Greatsword, Equipment::OtherDrawn}) {
                 const auto armed = ChooseIdle(gear, variant, true);
-                Check(armed.form && armed.armed && !armed.shoulder,
-                      "every supported drawn category gets an armed first phase even with shoulder selected");
+                Check(!armed.form,
+                      "drawn followers sheath before their single reaction");
             }
             Check(!ChooseIdle(Equipment::Transition, variant, true).form,
                   "drawing and sheathing wait for the equipment graph to settle");
@@ -264,28 +298,30 @@ int main()
                   "drawn bare fists do not select the sheathed shoulder clip");
         }
         for (unsigned sequence = 0; sequence < 12; ++sequence) {
-            unsigned shoulders = 0, subtle = 0, claps = 0;
+            unsigned shoulders = 0, victories = 0, stretches = 0, claps = 0;
             for (unsigned member = 0; member < 4; ++member) {
                 const auto variant = PartyVariation(member, sequence);
                 const auto choice = ChooseIdle(Equipment::Sheathed, variant, true);
-                shoulders += choice.shoulder;
-                subtle += choice.form == 0x977EC || choice.form == 0x75C3D;
-                claps += !choice.shoulder && choice.form != 0x977EC && choice.form != 0x75C3D;
+                shoulders += choice.customClip == 1;
+                victories += choice.customClip == 2;
+                stretches += choice.customClip == 3;
+                claps += !choice.shoulder;
                 Check(choice.form && choice.seconds > 0, "every eligible party member receives a reaction");
                 Check(ChooseIdle(Equipment::Sheathed, variant, false).form != 0,
                       "unavailable shoulder assets leave a valid fallback");
             }
-            Check(shoulders == 1 && subtle == 2 && claps == 1,
-                  "a four-member party gets shoulder, two subtle recoveries and one applause");
-            Check(ChooseIdle(Equipment::Sheathed, PartyVariation(0, sequence), true).shoulder,
-                  "even a small party reserves a shoulder selection");
+            Check(shoulders == 1 && victories == 1 && stretches == 1 && claps == 1,
+                  "four followers receive four separate single reactions");
+            Check(ChooseIdle(Equipment::Sheathed, PartyVariation(0, sequence), true).customClip !=
+                  ChooseIdle(Equipment::Sheathed, PartyVariation(0, sequence+1), true).customClip,
+                  "each follower advances to a different reaction next encounter");
         }
-        Check(ChooseIdle(Equipment::Sheathed, 3, true).seconds == 6.5F,
-              "authored shoulder clip retains its complete duration");
-        Check(WaitForIdleOwnership(.03F) && !WaitForIdleOwnership(.51F),
+        Check(ChooseIdle(Equipment::Sheathed, 2, true).seconds == 6.5F &&
+              ChooseIdle(Equipment::Sheathed, 0, true).seconds < 8.6F &&
+              ChooseIdle(Equipment::Sheathed, 1, true).seconds < 9.0F,
+              "independent clips retain their own durations, never a combined sequence");
+        Check(WaitForIdleOwnership(.04F) && WaitForIdleOwnership(.51F) && !WaitForIdleOwnership(.76F),
               "asynchronous idle startup cannot clear the OAR selection next frame");
-        Check(RetryEarlyIdleLoss(.51F, 1) && !RetryEarlyIdleLoss(.51F, 3) && !RetryEarlyIdleLoss(2, 1),
-              "early lost starts retry within a bounded attempt count");
         ShoulderSelections selections;
         selections.Set(0, true);
         Check(!selections.Contains(0), "invalid actors cannot own a shoulder replacement");

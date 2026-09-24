@@ -526,6 +526,12 @@ namespace Wayfarer
         return TraceGround(origin, goal, start, query, false);
     }
 
+    std::optional<GroundPoint> TraceGroundExact(GroundPoint origin, Vec2 goal, GroundKey start,
+                                                const GroundQuery& query)
+    {
+        return TraceGround(origin, goal, start, query, true);
+    }
+
     std::optional<GroundPoint> TraceGroundStep(GroundPoint origin, GroundPoint goal, GroundKey start,
                                                const GroundQuery& query)
     {

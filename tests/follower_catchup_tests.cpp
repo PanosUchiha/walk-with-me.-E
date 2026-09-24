@@ -44,7 +44,7 @@ int main()
     }
     Check(c.Update(.11F, true, 4500, 4000), "sustained separation recalls");
     c.Attempt(true);
-    for (int i = 0; i < 149; ++i) {
+    for (int i = 0; i < 79; ++i) {
         Check(!c.Update(.1F, true, 4500, 4000), "cooldown prevents repeated recalls");
     }
     Check(c.Update(.2F, true, 4500, 4000), "recall available after cooldown");
@@ -56,6 +56,53 @@ int main()
     Check(!c.Update(1, true, std::numeric_limits<float>::quiet_NaN(), 4000), "bad position never recalls");
     Check(!c.Update(1, true, 4500, 4000), "bad position reset delay");
     Check(c.Update(1, true, 4500, 4000), "valid distance eventually recalls");
+
+    FollowerCatchup away;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    Check(!away.Update(1, true, nan, 4000, true), "another cell counts as distant");
+    Check(!away.Update(1.9F, true, nan, 4000, true), "the engine gets three seconds to bring them through a door");
+    Check(away.Update(.2F, true, nan, 4000, true), "a companion left in another cell is recalled");
+    away.Attempt(true);
+    Check(!away.Update(1, false, nan, 4000, true), "a held companion in another cell stays put");
+    Check(CatchupDistance({0, 0, -1300}, {0, 0, 0}) >= 2463, "a long drop counts as distance");
+    Check(std::abs(CatchupDistance({300, 400, 0}, {0, 0, 0}) - 500) < .01F, "level ground is plain distance");
+
+    PlayerTrail trail;
+    for (int i = 0; i <= 40; ++i) {
+        trail.Record({i * 25.0F, 0, 0}, 7, true);
+    }
+    Check(trail.Size() == 21, "the trail keeps one point per 48 units walked");
+    trail.Record({1000, 0, 0}, 7, false);
+    Check(trail.Size() == 21, "airborne positions are not landings");
+    const auto behind = trail.Behind({1000, 0, 0}, 7, 200, 600, 150, 800);
+    Check(!behind.empty() && behind.front().x <= 800 && behind.back().x >= 400, "trail points lie behind by route");
+    for (std::size_t i = 1; i < behind.size(); ++i) {
+        Check(behind[i].x < behind[i - 1].x, "trail points are returned nearest first");
+    }
+    Check(trail.Behind({1000, 0, 0}, 8, 0, 600, 0, 800).empty(), "another cell has no trail");
+    trail.Record({1050, 0, 400}, 7, true);
+    Check(trail.Size() == 1, "a fall the navmesh may not link starts a fresh trail");
+    trail.Record({5000, 0, 400}, 7, true);
+    Check(trail.Size() == 1, "fast travel starts a fresh trail");
+    trail.Record({5000, 0, 400}, 9, true);
+    Check(trail.Size() == 1 && trail.Behind({5000, 0, 400}, 7, 0, 600, 0, 800).empty(),
+          "changing cell forgets the old route");
+    PlayerTrail corner;
+    for (int i = 0; i <= 10; ++i) {
+        corner.Record({0, i * 50.0F, 0}, 1, true);
+    }
+    for (int i = 1; i <= 10; ++i) {
+        corner.Record({i * 50.0F, 500, 0}, 1, true);
+    }
+    const auto around = corner.Behind({500, 500, 0}, 1, 700, 900, 0, 800);
+    Check(!around.empty() && around.front().x == 0, "route distance follows the path around a corner");
+
+    const auto ranked = RankLandings({{{0, 300, 0}, 300}, {{0, -300, 0}, 300}, {{300, 0, 0}, 300}},
+                                     {0, 0, 0}, {0, 1}, 300);
+    Check(ranked.size() == 3 && ranked[0].y < 0, "landings behind the player come first");
+    Check(ranked[2].y > 0, "landings ahead of the player come last");
+    const auto walled = RankLandings({{{0, -300, 0}, 1400}, {{-100, -280, 0}, 310}}, {0, 0, 0}, {0, 1}, 300);
+    Check(walled[0].x < 0, "a spot behind a wall loses to one reached directly");
     Wheel::Motion m;
     m.Open(0);
     float last = 0;

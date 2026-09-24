@@ -5,12 +5,13 @@
 #include "hand_holding.h"
 #include "input_handler.h"
 #include "logging.h"
+#include "loot_scout.h"
 #include "menu_ui.h"
 #include "papyrus_bridge.h"
 #include "runtime_compatibility.h"
+#include "rest_dialogue.h"
 #include "tether_clasp.h"
 #include "travel_speed.h"
-#include "victory_animation.h"
 
 namespace
 {
@@ -71,6 +72,8 @@ namespace
             Wayfarer::FormationController::GetSingleton().Update(a_delta);
             Wayfarer::FormationController::GetSingleton().UpdateHandHolding(a_delta);
             Wayfarer::Menu::Publish();
+            Wayfarer::RestDialogue::Update(a_delta);
+            Wayfarer::Loot::Update(a_delta);
         }
 
         static void Install()
@@ -87,7 +90,6 @@ namespace
     {
         switch (a_message->type) {
         case SKSE::MessagingInterface::kPostLoad:
-            Wayfarer::Victory::Animation::Register();
             Wayfarer::HandHolding::Clasp::Register();
             break;
         case SKSE::MessagingInterface::kInputLoaded:
@@ -100,6 +102,7 @@ namespace
             Wayfarer::InputHandler::Register();
             PlayerUpdateHook::Install();
             Wayfarer::HandHolding::Install();
+            Wayfarer::Loot::Install();
             break;
         case SKSE::MessagingInterface::kPreLoadGame:
             Wayfarer::FormationController::GetSingleton().ResetForGameLoad();

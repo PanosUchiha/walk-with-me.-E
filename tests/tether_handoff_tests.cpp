@@ -1,4 +1,5 @@
 #include "dialogue_guard.h"
+#include "hand_hold_state.h"
 #include "tether_approach.h"
 #include "tether_clasp.h"
 #include "tether_contact.h"
@@ -36,13 +37,13 @@ int main()
         check(!s.Next(), "no concurrent operation");
         check(s.Complete(op, ok), "matching callback");
     };
-    constexpr std::array setup{TetherOp::Offset, TetherOp::AddPlayer, TetherOp::AddFollower,
-                               TetherOp::Connect};
+    constexpr std::array setup{TetherOp::AddPlayer, TetherOp::AddFollower, TetherOp::Connect,
+                               TetherOp::Offset};
     constexpr std::array teardown{TetherOp::Disconnect, TetherOp::RemoveFollower, TetherOp::RemovePlayer,
                                   TetherOp::ClearOffset};
     TetherSession s;
     s.Start();
-    check(!s.Begin(TetherOp::AddPlayer), "physics cannot precede movement offset");
+    check(!s.Begin(TetherOp::Offset), "movement offset cannot precede the grip");
     for (auto op : setup) {
         finish(s, op);
     }
@@ -100,20 +101,74 @@ int main()
         check(s.Done(), "cleanup success unlocks formation");
     }
     s.Start();
-    s.Begin(TetherOp::Offset);
-    check(TetherStepCurrent(s, 12, 12, 6), "current offset ticket admitted");
-    check(!TetherStepCurrent(s, 13, 12, 6), "old save/session cannot mutate loaded actors");
+    s.Begin(TetherOp::AddPlayer);
+    check(TetherStepCurrent(s, 12, 12, 0), "current body ticket admitted");
+    check(!TetherStepCurrent(s, 13, 12, 0), "old save/session cannot mutate loaded actors");
     check(!s.Complete(TetherOp::Connect, true), "out-of-order callback cannot acquire resource");
-    s.Complete(TetherOp::Offset, true);
-    check(!s.Complete(TetherOp::Offset, true), "duplicate result ignored");
+    s.Complete(TetherOp::AddPlayer, true);
+    check(!s.Complete(TetherOp::AddPlayer, true), "duplicate result ignored");
     s.Cancel();
-    s.Begin(TetherOp::ClearOffset);
-    check(TetherStepCurrent(s, 12, 12, 7), "teardown allowed after cancellation");
-    s.Complete(TetherOp::ClearOffset, true);
-    check(s.Done(), "offset-only attempt recovers");
+    s.Begin(TetherOp::RemovePlayer);
+    check(TetherStepCurrent(s, 12, 12, 5), "teardown allowed after cancellation");
+    s.Complete(TetherOp::RemovePlayer, true);
+    check(s.Done(), "body-only attempt recovers without ever taking movement");
+
+    // A gait/contact change between native dispatch and VM execution performs
+    // no mutation. Preserve earlier resources instead of restarting the attempt.
+    for (std::size_t at = 0; at < setup.size(); ++at) {
+        s.Start();
+        for (std::size_t i = 0; i < at; ++i) {
+            finish(s, setup[i]);
+        }
+        const bool hadPlayer = s.player, hadFollower = s.follower, hadOffset = s.offset,
+                   hadConstraint = s.constraint, wasConnected = s.connected;
+        check(s.Begin(setup[at]), "deferred step starts normally");
+        check(!s.Defer(TetherOp::Disconnect), "wrong result cannot clear a pending setup");
+        check(s.Defer(setup[at]), "unexecuted setup can defer");
+        check(!s.cancelled && !s.pending && s.Next() == setup[at],
+              "deferred setup retries the same operation");
+        check(s.player == hadPlayer && s.follower == hadFollower && s.offset == hadOffset &&
+                  s.constraint == hadConstraint && s.connected == wasConnected,
+              "deferral neither acquires nor discards physics resources");
+        check(!s.Defer(setup[at]), "duplicate deferral cannot complete a future operation");
+        check(s.Begin(setup[at]), "retry can be dispatched again");
+        s.Cancel();
+        check(s.Defer(setup[at]), "late no-mutation result permits cancellation cleanup");
+        while (const auto op = s.Next()) {
+            check(IsCleanup(*op), "deferred cancellation never restarts setup");
+            check(s.Begin(*op), "cleanup starts after deferred cancellation");
+            check(!s.Defer(*op), "cleanup must never silently relinquish a live resource");
+            check(s.Complete(*op, true), "cleanup still receives its result");
+        }
+        check(s.Done(), "deferred cancelled attempt fully cleans up");
+    }
 
     TetherHandoff h;
+    // Reproduce Rumarin's delayed alias sweep. Grip setup must neither wait for
+    // its acknowledgement nor send him back to an ordinary formation target.
+    s = {};
+    s.Cancel();
+    check(TetherRetainsApproach(s, h), "an idle cancelled state can begin a fresh approach");
+    s.Start();
+    for (auto op : {TetherOp::AddPlayer, TetherOp::AddFollower, TetherOp::Connect}) {
+        check(TetherRetainsApproach(s, h), "the arrival target remains active throughout physics setup");
+        check(!NeedsHandoff(op) && !h.ready, "grip creation does not wait for alias cleanup");
+        finish(s, op);
+    }
+    check(s.connected && s.constraint && !s.offset && s.Next() == TetherOp::Offset,
+          "hands are connected before any movement handoff");
     h.Start(42, 8);
+    check(!TetherRetainsApproach(s, h) && NeedsHandoff(*s.Next()),
+          "connected grip requests handoff but cannot race the old offset cleanup");
+    for (int frame = 0; frame < 180; ++frame) {
+        check(s.connected && !h.ready && s.Next() == TetherOp::Offset,
+              "a three-second alias delay does not delay or drop the existing grip");
+    }
+    s.Cancel();
+    for (auto op : {TetherOp::Disconnect, TetherOp::RemoveFollower, TetherOp::RemovePlayer}) {
+        finish(s, op);
+    }
+    check(s.Done() && !s.offset, "release before handoff drains physics without clearing an unowned offset");
     check(!h.Confirm(42, 8, true, true), "empty alias cannot bypass a script stack still clearing offset");
     check(!h.RecordCleanup(42, 7, true), "stale cleanup cannot arm new ticket");
     check(!h.RecordCleanup(43, 8, true), "reassigned actor cannot arm cleanup");
@@ -156,16 +211,6 @@ int main()
     check(!TetherGripReady(60, 0, 30, true, 90, 20) && TetherGripReady(60, 0, 18, true, 90, 20),
           "the configured wrist gap decides when the constraint may be created");
 
-    // The constraint snaps the palms together when it is created, so acquisition
-    // holds out for a close gap and only widens it if the pair cannot get there.
-    check(TetherGripGap(0, 20, 45, 3) == 20, "a fresh approach demands the accurate gap");
-    check(TetherGripGap(1.5F, 20, 45, 3) == 32.5F, "the requirement widens steadily while unreachable");
-    check(TetherGripGap(3, 20, 45, 3) == 45 && TetherGripGap(30, 20, 45, 3) == 45,
-          "widening stops at the reachable limit rather than growing without bound");
-    check(TetherGripGap(std::numeric_limits<float>::quiet_NaN(), 20, 45, 3) == 20 &&
-              TetherGripGap(1, 20, 10, 3) == 20 && TetherGripGap(1, 20, 45, 0) == 20,
-          "invalid relaxation falls back to the accurate gap, never a wider one");
-
     // Turning the follower into place finishes before any physics body exists.
     check(TetherHeadingSettled(.1F, 40, 1, 0), "a squared-up follower is ready for the ragdoll bodies");
     check(!TetherHeadingSettled(.3F, 40, 1, 0), "a follower still turning is not ready");
@@ -174,17 +219,42 @@ int main()
     check(!TetherHeadingSettled(std::numeric_limits<float>::quiet_NaN(), 40, 1, 0),
           "invalid heading is never settled");
 
+    // Facing correction happens at the held arrival position before physics.
+    // In particular, a pending add may already have created a body.
+    TetherSession facingSession;
+    facingSession.Start();
+    check(CanCorrectTetherFacing(facingSession), "align without waiting for movement handoff");
+    facingSession.Begin(TetherOp::AddPlayer);
+    check(!CanCorrectTetherFacing(facingSession), "pending physics blocks direct rotation");
+    facingSession.Complete(TetherOp::AddPlayer, true);
+    check(!CanCorrectTetherFacing(facingSession), "live physics blocks direct rotation");
+    facingSession = {};
+    check(!CanCorrectTetherFacing(facingSession), "an idle follower is never rotated");
+    facingSession.Start();
+    facingSession.Cancel();
+    check(!CanCorrectTetherFacing(facingSession), "cancellation cannot turn the follower");
+    for (int side : {-1, 1}) {
+        check(TetherFacingReady(.1F, 40.0F * side, side, 70),
+              "either-side arrival can start offset once facing agrees");
+        check(!TetherFacingReady(3.14F, 40.0F * side, side, 0),
+              "offset cannot start a backward-facing slow spin");
+        check(!TetherFacingReady(.1F, -40.0F * side, side, 0), "wrong-side facing never starts offset");
+    }
+    check(!TetherFacingReady(.1F, 40, 1, 140) &&
+              !TetherFacingReady(std::numeric_limits<float>::quiet_NaN(), 40, 1, 0),
+          "running past and invalid facing cannot start offset");
+
     // Each setup operation waits only on what it depends on, so the constraint is
     // the single Papyrus round trip left after the hands reach each other.
-    check(NeedsHandoff(TetherOp::Offset) && NeedsHandoff(TetherOp::Connect) &&
-              NeedsHandoff(TetherOp::AddPlayer),
-          "nothing is dispatched over WWM's own package");
+    check(NeedsHandoff(TetherOp::Offset) && !NeedsHandoff(TetherOp::Connect) &&
+              !NeedsHandoff(TetherOp::AddPlayer) && !NeedsHandoff(TetherOp::AddFollower),
+          "only offset movement waits for WWM's package cleanup");
     check(!NeedsHandoff(TetherOp::Disconnect) && !NeedsHandoff(TetherOp::RemovePlayer) &&
               !NeedsHandoff(TetherOp::RemoveFollower) && !NeedsHandoff(TetherOp::ClearOffset),
           "teardown is never blocked by a handoff that may never arrive");
     check(!NeedsHeading(TetherOp::Offset) && NeedsHeading(TetherOp::AddPlayer) &&
               NeedsHeading(TetherOp::AddFollower),
-          "the offset starts the turn that the ragdoll bodies wait for");
+          "physics waits for settled facing; connected offset may start while walking");
     check(!NeedsGrip(TetherOp::AddPlayer) && !NeedsGrip(TetherOp::AddFollower) &&
               NeedsGrip(TetherOp::Connect),
           "only the constraint waits for the palms to arrive");
@@ -207,11 +277,9 @@ int main()
     check(!TetherAlignedGrip(45, 0, 30, true, 90, 40, 1, 3.14F, 0, 0, 45),
           "arrival alone cannot attach physics facing backwards");
     arrival.elapsed = 0;
-    check(!arrival.Observe(true, 45, 0, 0, 40, -10, 0, .12F), "momentary proximity does not seize movement");
-    check(!arrival.Observe(false, 45, 0, 0, 40, -10, 0, .1F), "lost sight interrupts continuous settling");
-    check(!arrival.Observe(true, 45, 0, 0, 40, -10, 0, .12F) &&
-              arrival.Observe(true, 45, 0, 0, 40, -10, 0, .1F),
-          "adjacent arrival may hand off after continuous dwell");
+    check(arrival.Observe(true, 45, 0, 0, 40, -10, 0, .016F), "adjacent arrival begins on the first frame");
+    check(!arrival.Observe(false, 45, 0, 0, 40, -10, 0, .1F), "lost sight blocks acquisition");
+    check(arrival.Observe(true, 45, 0, 0, 40, -10, 0, .016F), "regaining contact needs no extra dwell");
     arrival.Fail();
     for (int i = 0; i < 60; ++i) {
         check(!arrival.Observe(true, 45, 0, 0, 40, -10, 0, 1), "failed setup cannot loop package takeovers");
@@ -229,9 +297,8 @@ int main()
           "physics waits for follower locomotion to settle");
     check(!TetherAlignedGrip(45, 0, 60, true, 90, 40, 1, .1F, 0, 0, 45),
           "positioning is not proof of reachable hands");
-    check(!TetherAlignedGrip(45, 0, 30, true, 90, 40, 1, .1F, 0, 0, TetherGripGap(0, 20, 45, 3)) &&
-              TetherAlignedGrip(45, 0, 30, true, 90, 40, 1, .1F, 0, 0, TetherGripGap(3, 20, 45, 3)),
-          "a grip that cannot be made accurately is still made eventually");
+    check(TetherAlignedGrip(45, 0, 30, true, 90, 40, 1, .1F, 0, 0, Tuning{}.gripGap),
+          "the default gap admits Rumarin's reachable wrists without a widening timer");
 
     // Exercise the actual planner's destination and commit/repath rules with
     // the engine's stopping radius, not just isolated handholding thresholds.
@@ -274,6 +341,19 @@ int main()
           "approach does not force a marker commit every tick");
     check(!route.ShouldRepath({120, -80}, 0, false, true, close),
           "approach does not refresh packages every tick");
+    const Vec2 arrived{48, -10};
+    route.Commit(destination, arrived, TravelPace::kWalk);
+    route.MarkRepathed();
+    check(!route.ShouldCommit(arrived, arrived, TravelPace::kWalk, close) &&
+              RepathArrivalHold(route, arrived),
+          "arrival stop immediately replaces even a recent target inside the ordinary change threshold");
+    route.Commit(arrived, arrived, TravelPace::kWalk);
+    route.MarkRepathed();
+    for (int frame = 0; frame < 180; ++frame) {
+        route.Tick(arrived, 1.0F / 60, true, close);
+        check(!RepathArrivalHold(route, arrived) && !route.ShouldRepath(arrived, 0, false, true, close),
+              "holding arrival does not repeatedly restart pathfinding during a delayed VM callback");
+    }
     ArrivalRadiusLease radiusLease;
     std::uint32_t radius = 65;
     check(radiusLease.Update(radius, true) && radius == 12,

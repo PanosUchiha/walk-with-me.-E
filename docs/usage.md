@@ -13,6 +13,23 @@ Do not rename the Wayfarer DLL, ESP, scripts or INI; saves and other mods use th
 
 ## Party
 
+During temporary rest or manual Rest / Relax, a small chat bubble marks managed
+companions with unheard conversation options. Trading, NFF and other follower
+commands are filtered. It disappears when rest ends. Under **Interface > Follower
+icons**, toggle **Show chat icons** or turn off **Animate chat icons** to keep a
+still, slightly transparent emblem. See [detection details](rest-dialogue.md).
+
+The settings pages are **Party**, **Travel**, **Rest**, **Loot**, **Interface**, and
+**Controls**. They retain Walk With Me's yellowish/ivory palette with SceneDirector's
+0.85 font scale, compact spacing and aligned setting rows. Checkbox groups use
+two or three columns when space permits and fewer in narrow panels. Advanced movement,
+rest timing, loot tuning and hand-holding settings are collapsible.
+
+The supplied Walk With Me artwork sits behind every settings page in the
+bottom-right corner at 20% opacity. It keeps its proportions, scales with the
+panel and stays in place while the settings scroll. The PNG is installed as
+`Interface/WalkWithMe/menu-background.png`.
+
 Automatic enrollment is off by default. Aim at a companion and press **G**, then
 choose **Travel together**, or use Party Add for a recruited follower. The party
 limit is 10. Existing explicit additions remain saved; no new game is needed.
@@ -75,12 +92,14 @@ right stick, confirm with A, cancel with B. Releasing the stick issues no order.
 Two mouse controls sit below the wheel:
 
 - **Teleport party** closes the menu and brings eligible travelling companions
-  to clear nearby ground, including companions available from active follower
-  slots in other cells. Waiting, excluded, combat and scene actors are skipped.
-  The button shows the available count or why teleport is unavailable.
+  to nearby ground, including companions available from active follower slots
+  in other cells. It works in combat and on horseback. Waiting, excluded,
+  scripted, seated and riding companions stay put, and the notification names
+  them. The button shows the available count or why teleport is unavailable.
+  See [teleport.md](teleport.md).
 - **Temporary relaxation** toggles automatic rest when you stop and saves the
   preference immediately. Turning it off leaves the explicit **Relax** order
-  available. This is the same setting as **Temporary rest** under Travel.
+  available. This is the same setting as **Temporary rest** under Rest.
 
 These controls have hover animations and an animated toggle. They do not add
 gamepad bindings or change the six wheel directions. See
@@ -94,45 +113,64 @@ exact. Escape cancels capture, Delete clears it. See hotkeys.md in the source.
 Adjust spacing, catch-up speed and turn delay under Travel. The default turn
 delay is 0.22 seconds. Companion individuality defaults to 1; use 0 for shared pace.
 
-Toggle **Temporary rest** under **Travel > Rest & Sandbox** to enable or disable
+Toggle **Temporary rest** under **Rest > Rest & exploration** to enable or disable
 automatic rest when you stop. This setting saves immediately and preserves the
 existing `Sandbox/bAutomatic` preference (previously labeled "Relax when stopped").
 Temporary rest ends when you leave its range. The **Relax** command works with
 the toggle off and stays active until another order. Temporary-rest and resume
 HUD icons are 75% larger and still follow your HUD scale setting.
+As soon as rest starts, companions set out for seats, idle markers or a patch of
+open ground of their own, spreading across a 1600-unit area by default. From time
+to time two of them pair up and talk for two to three minutes; if they are apart,
+one walks over first. See [rest dispersal](rest-dispersal.md).
+With **Area activities** on, the place shapes all of it: fires, shrines, shores and
+lookouts to walk to, place-specific poses, hushed talk in caves, and at an inn a
+shared table with a server called over for drinks. See [area activities](area-activities.md).
 Activities need nearby furniture, idles and connected navigation.
 Stairs and ramps work within the height limit; load doors are not crossed.
 
 Walking banter is on by default. Eligible pairs can talk while moving, but scenes
 with their own packages or other restrictions keep control. No voiced lines are added.
-Victory reactions are on by default after a won fight with at least three enemies.
-Nearby eligible teammates receive a rotating mix of shoulder recovery, applause,
-brow wiping and hand inspection. An armed reaction can precede recovery after
-natural sheathing. See [victory.md](victory.md) for equipment and interruption limits.
+Post-victory reactions and their settings are not included in this release.
+
+## Loot scouting
+
+Under **Loot > Loot scouting**, choose a **Loot finder**, or leave it on **Any
+companion** to use whoever is nearest. The finder looks over the chests, bodies
+and valuable loose items in view and walks to the richest one. They kneel to
+search it for **Search for** seconds (12 by default), then wait beside it for up to
+15 seconds before resuming normal following/rest. A chest
+appears above their head: white for ordinary loot, gold when one item is worth
+more than the **Valuable above** value (1000 gold by default). They leave when
+you open the find or move beyond **Leave when you are beyond**. After one find
+they stop searching until you move on. Only one companion goes at a time.
+Scouting is off inside houses, inns, temples, shops and castles unless you enable
+**Inside homes and inns**. See
+[loot scouting](loot-scouting.md).
 
 ## Gestures and hand holding
 
-Command hand signals are optional. Third-person Lead, Companion and Rear clips
-are included, with female variants. First-person clips come from First Person
-Interactions. Install FPI, Open Animation Replacer and GP Offset Movement
-Animation, then generate its behavior with Nemesis or a compatible Pandora setup.
+Command hand signals are optional. Third-person Lead, Companion and Rear clips,
+with female variants, come in the separate **Command Gestures** add-on.
+First-person clips come from First Person Interactions. Install the matching
+add-on, FPI, Open Animation Replacer and the full GP Offset Movement Animation
+mod, then generate its behavior with Nemesis or your compatible Pandora setup.
+Enable **Controls > Wheel & signals > Command hand signal**. See
+[Gesture setup](gestures.md) for download links and mod-manager order.
 Gestures skip busy states. Vanilla has no signal. Gesture Animation Remix is not needed.
 
 Hand holding is experimental and off by default. Select one follower and use
-Companion mode in third person. The selected follower approaches
-your side through normal pathfinding. Pause to let them arrive, turn into alignment
-and connect before walking. Offset movement then targets a position slightly behind.
-Dialogue releases the grip and retains the existing dialogue grace. Sprinting
-also releases it. Handholding adds no speed boost or player slowdown.
-After a failed attempt, step away by over 150 units or toggle handholding to retry.
-Revision 18 remembers finished script cleanup while waiting for the package
-transition. Normal release has a three-second retry cooldown; failed setup
-retains its eight-second cooldown and rearming requirement. OAR supplies a clasp
-pose for the selected arms during offset positioning and holding. The local
-test clips retain vanilla locomotion while changing the holding arm's rotation;
-other animation replacers resume when the grip releases. OAR and matching pose
-assets are required. Visual alignment still needs testing with the live actors.
-See tether-r18-handoff.md for checks and limitations.
+Companion mode in third person. Choose **Classic** in Travel's
+**Hand-holding method** selector for the earlier procedural hand holding without
+generated clasp clips, or keep **TETHER** for the physics grip. Switching releases
+the current grip before reconnecting. See [hand holding](hand-holding.md).
+
+With TETHER, the follower approaches your side through normal pathfinding.
+Pause to let them arrive, turn and connect. The hands connect before movement
+handoff; script cleanup still gates subsequent offset movement. Dialogue and
+sprinting release the grip. Hand holding adds no speed boost or player slowdown.
+TETHER requires OAR and locally generated clasp poses; Classic does not.
+See [hand holding](hand-holding.md) for setup, tuning and current limitations.
 Physics, offset movement and the speed hook credit
 [TETHER](https://github.com/Kei-BWV997/TETHER) by **KEI997** under MIT.
 

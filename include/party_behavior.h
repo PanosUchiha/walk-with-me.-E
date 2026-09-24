@@ -5,15 +5,16 @@ namespace Wayfarer
     struct SandboxTuning
     {
         bool automatic{true};
-        float startRadius{180};
-        float maxRadius{1000};
-        float settledActivityRadius{1000};
+        float startRadius{400};
+        float maxRadius{1600};
+        float settledActivityRadius{1600};
         float activityHeight{768};
-        float fullSandboxAfter{30};
+        float fullSandboxAfter{10};
         float idleRecoveryAfter{45};
         float resumeDistance{250};
         bool social{true};
         bool extraPoses{false};
+        bool areaActivities{true}; // Place-specific poses, fires, shrines, shores and lookouts.
         bool groundSitting{true}, meals{true}, reading{true}, stretching{true};
     };
     struct SandboxState

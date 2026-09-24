@@ -8,6 +8,7 @@ namespace Wayfarer
         int kind{};
         bool started{}, initialized{};
         float elapsed{}, prepare{}, cooldown{}, duration{};
+        float prepareLimit{12}; // Longer for a chair across the room.
         std::uint32_t sequence{};
         static std::uint32_t Mix(std::uint32_t x)
         {
@@ -28,6 +29,7 @@ namespace Wayfarer
             kind = choice;
             started = false;
             elapsed = prepare = 0;
+            prepareLimit = 12;
             duration = 25.0F + Mix(id + ++sequence * 7919) % 21;
         }
         void End(std::uint32_t id)
@@ -49,7 +51,7 @@ namespace Wayfarer
                     started = true;
                     elapsed = 0;
                 }
-                return prepare >= 12 && !started;
+                return prepare >= prepareLimit && !started;
             }
             elapsed += dt;
             return !ready || elapsed >= duration;

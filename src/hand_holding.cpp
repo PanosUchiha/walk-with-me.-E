@@ -1,4 +1,3 @@
-#include "hand_holding.h"
 #include "command_gesture.h"
 #include "engine_compatibility.h"
 #include "formation_math.h"
@@ -6,24 +5,9 @@
 #include "hand_hold_ik.h"
 #include "hand_hold_overrides.h"
 #include "hand_hold_pose.h"
+#include "hand_holding_backends.h"
 
-#ifndef WAYFARER_MODERN_COMMONLIB
-// Collector backport from CommonLibSSE-NG 7.5.1.
-namespace RE
-{
-    hkpRayHitCollector::~hkpRayHitCollector() {}
-    hkpClosestRayHitCollector::~hkpClosestRayHitCollector() {}
-    void hkpClosestRayHitCollector::AddRayHit(const hkpCdBody& body,
-                                              const hkpShapeRayCastCollectorOutput& hit)
-    {
-        using Function = decltype(&hkpClosestRayHitCollector::AddRayHit);
-        static REL::Relocation<Function> function{RELOCATION_ID(59653, 60338)};
-        function(this, body, hit);
-    }
-} // namespace RE
-#endif
-
-namespace Wayfarer::HandHolding
+namespace Wayfarer::HandHolding::Classic
 {
     namespace
     {
@@ -1252,4 +1236,4 @@ namespace Wayfarer::HandHolding
     {
         return actor && attachedActor.load(std::memory_order_acquire) == actor;
     }
-} // namespace Wayfarer::HandHolding
+} // namespace Wayfarer::HandHolding::Classic

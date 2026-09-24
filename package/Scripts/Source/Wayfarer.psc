@@ -32,5 +32,6 @@ Bool Function HasRestActivities() Global Native
 
 ; Ticketed handoff and serialized TETHER operations (revision 13).
 Int Function GetTetherHandoffTicket(Int aiSlot) Global Native
+ReferenceAlias Function GetTetherHandoffAlias(Int aiSlot, Int ticket) Global Native
 Function ConfirmTetherHandoff(Int aiSlot, Int ticket) Global Native
 Int Function TetherStepStatus(Int ticket, Int operation, Actor leader, Actor follower) Global Native

@@ -3,14 +3,16 @@
 Skyrim follower mod. Travel with up to 10 companions, change their formation,
 and let them rest nearby.
 
-Version **0.2.1** preserves the user-approved r3 movement baseline with updated
-post-combat reactions, separate command gestures, companion controls and
-experimental TETHER-based hand holding. See the [changelog](docs/changes-0.2.1.md) and
-[companion controls](docs/package-control.md).
+Version **0.2.2** adds animated follower icons, compact settings with the original
+yellow/ivory palette and background artwork, richer rest activities, loot scouting,
+reworked teleport catch-up, and Classic/TETHER hand-holding choices.
+See the [changelog since public 0.2.0](docs/changes-0.2.2.md).
 
 For future feature work, start from the [accepted baseline](docs/baseline-0.2.1.md).
 
 The public package includes a local generator for optional hand-clasp animations.
+Travel settings also offer **Classic** hand holding, which needs no
+generated clasp animations. Classic is the default method.
 It contains no Skyrim-derived clasp clips. See [hand holding](docs/hand-holding.md).
 Command signals and their GPMA extension now ship in the separate Command Gestures
 add-on. Install its requirements and regenerate behaviors as described in
@@ -30,12 +32,13 @@ NFF and other frameworks are optional. See [release details](docs/release.md).
 
 ## Docs
 
+- [Current work and complete review handoff](docs/review-handoff-2026-09-23.md)
 - [Controls and features](docs/usage.md)
 - [Gesture setup](docs/gestures.md)
 - [Build](docs/build.md)
 - [API](docs/api-guide.md)
 - [Tests](docs/testing.md)
-- [Changes](docs/changes-0.2.1.md)
+- [Changes](docs/changes-0.2.2.md)
 - [Publish source](docs/publish.md)
 
 ## License
@@ -48,10 +51,9 @@ Created by Tobih with Codex. Third-party credits are in `package/ThirdParty`.
 
 The travel-speed hook credits [TETHER](https://github.com/Kei-BWV997/TETHER)
 by **KEI997** (MIT, Copyright (c) 2026 KEI997).
-Revision 18 adds an authored clasp pose through OAR and fixes a handoff wait
-when script cleanup finishes before the engine changes packages. Pause to
-arrive and connect. The combined pose/physics result needs an in-game check;
-see [the test guide](docs/tether-r18-handoff.md).
+Classic is the default hand-holding method. The optional TETHER method uses
+locally generated OAR clasp poses and connects the grip before movement handoff.
+See [hand holding](docs/hand-holding.md) for setup and limitations.
 See `package/ThirdParty/TETHER-NOTICE.txt`.
 
 ## Shoutout The Haters for Reporting

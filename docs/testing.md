@@ -10,6 +10,8 @@ Run CTest after a build. Then use a separate save for these game checks.
 - Walk, run, turn, stop and resume. Followers should catch up without repeated stops.
 - Try stairs, narrow doors, towns, rocks and exterior cell boundaries.
 - Check temporary rest, its return range and Relax. Relax should wait for an order.
+- Check [rest conversation icons](rest-dialogue.md): temporary rest and Relax both
+  show eligible chat bubbles; travelling, dialogue, menus and combat hide them.
 - Start dialogue, combat and scripted scenes. Those must keep control.
 - Disable the mod or choose Vanilla. Travel, rest and gestures must stop.
 - Reload a save and fast travel. No old order or celebration should replay.

@@ -22,6 +22,10 @@
 #include "config.h"
 #include "travel_speed.h"
 
+#include <bit>
+#include <numbers>
+#include <span>
+
 namespace
 {
     constexpr RE::FormID CURRENT_FOLLOWER_FACTION = 0x0005C84E;
@@ -63,6 +67,163 @@ namespace
             return RestContext::Interior;
         }
         return town ? RestContext::Settlement : RestContext::Wilderness;
+    }
+    // Finer than ContextFor: what kind of interior, cave or ruin they are resting in.
+    Wayfarer::RestPlace PlaceFor(RE::Actor& actor)
+    {
+        Wayfarer::PlaceSignals signals;
+        signals.interior = !actor.GetParentCell() || actor.GetParentCell()->IsInteriorCell();
+        auto* location = actor.GetCurrentLocation();
+        for (int depth = 0; location && depth < 32; ++depth, location = location->parentLoc) {
+            auto has = [&](std::initializer_list<RE::FormID> ids) {
+                for (auto id : ids) {
+                    auto* key = RE::TESForm::LookupByID<RE::BGSKeyword>(id);
+                    if (key && location->HasKeyword(key)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            // LocSetCave, LocSetCaveIce, LocTypeAnimalDen, LocTypeMine.
+            signals.cave |= has({0x130EF, 0x100819, 0x130DE, 0x18EF1});
+            // Nordic and Dwemer ruins, forts, crypts, lairs, hives, generic and clearable dungeons.
+            signals.ruin |= has({0x130F2, 0x130F0, 0x130F1, 0x130E7, 0x130E2, 0x130E1, 0x130E4, 0x130EB, 0x130EC,
+                                 0x130DB, 0xF5E80});
+            signals.inn |= has({0x1CB87});
+            signals.playerHouse |= has({0xFC1A3});
+            signals.temple |= has({0x1CD56});
+            signals.store |= has({0x1CB86});
+            // Castle, guild, barracks, jail, steward's dwelling.
+            signals.hall |= has({0x1CD57, 0x1CD5A, 0x1CD55, 0x1CD59, 0x504F9});
+            // City, settlement, town, farm, orc stronghold, hold capital, lumber mill.
+            signals.town |= has({0x13168, 0x13167, 0x13166, 0x18EF0, 0x130E9, 0x868E2, 0x18EF2});
+        }
+        // A cave that is also flagged a dungeon reads as a cave, not a ruin.
+        if (signals.cave) {
+            signals.ruin = false;
+        }
+        return Wayfarer::ClassifyPlace(signals);
+    }
+    Wayfarer::PlaceTraits TraitsFor(RE::Actor& actor)
+    {
+        Wayfarer::PlaceTraits traits;
+        auto* cell = actor.GetParentCell();
+        if (cell && !cell->IsInteriorCell()) {
+            auto* sky = RE::Sky::GetSingleton();
+            traits.cold = sky && sky->currentWeather &&
+                          sky->currentWeather->data.flags.any(RE::TESWeather::WeatherDataFlag::kSnow);
+        }
+        auto* ice = RE::TESForm::LookupByID<RE::BGSKeyword>(0x100819); // LocSetCaveIce
+        for (auto* location = actor.GetCurrentLocation(); ice && location && !traits.cold;
+             location = location->parentLoc) {
+            traits.cold = location->HasKeyword(ice);
+        }
+        auto* weapon = actor.GetEquippedObject(false);
+        auto* sword = weapon ? weapon->As<RE::TESObjectWEAP>() : nullptr;
+        traits.sword = sword && sword->GetWeaponType() == RE::WEAPON_TYPE::kOneHandSword;
+        return traits;
+    }
+    // Fires, shrines and standing stones, recognized by model path (cached per base form).
+    // A cooking pot or spit counts as a fire: it only ever hangs over one.
+    Wayfarer::AreaFeature FeatureFor(RE::TESBoundObject& base)
+    {
+        static std::unordered_map<RE::FormID, Wayfarer::AreaFeature> cache;
+        if (auto found = cache.find(base.GetFormID()); found != cache.end()) {
+            return found->second;
+        }
+        auto feature = Wayfarer::AreaFeature::None;
+        if (auto* furniture = base.As<RE::TESFurniture>()) {
+            for (auto id : {0xA5CB3u, 0x68ADAu}) { // CraftingCookpot, isCookingSpit
+                auto* key = RE::TESForm::LookupByID<RE::BGSKeyword>(id);
+                if (key && furniture->HasKeyword(key)) {
+                    feature = Wayfarer::AreaFeature::Fire;
+                }
+            }
+        }
+        else if (auto* model = base.As<RE::TESModel>(); model && model->GetModel()) {
+            std::string path = model->GetModel();
+            std::transform(path.begin(), path.end(), path.begin(),
+                           [](unsigned char c) { return static_cast<char>(c == '/' ? '\\' : std::tolower(c)); });
+            feature = Wayfarer::FeatureFromModel(path);
+        }
+        cache.emplace(base.GetFormID(), feature);
+        return feature;
+    }
+    // Work, ritual and quest markers that are furniture to the engine but not a place to rest.
+    bool UnsuitableRestFurniture(RE::TESFurniture& furniture)
+    {
+        static constexpr RE::FormID blocked[] = {
+            0xC481F,  0xA82C3,  0x613A8,  0x613A9,  0xC432A,  0xC4329,  0xF09FD,  0xF71C8,  0xEF94F,
+            0x70C0A,  0x2E8ED,  0xEB60C,  0xD8737,  0xC482F,  0x8C775,  0x10651B, 0x106514, 0x105D4B,
+            0x103444, 0x103443, 0x101A74, 0x1018EB, 0xFDBE9,  0xFBA5E,  0xF6CD0,  0xF3B64,  0xEDF3C,
+            0x10ACA9, 0xDBE42,  0xE5197,  0x72DFB,  0x88107,  0x9C6DE,  0x9C6C3,  0xA5CB3,  0x68ADA};
+        for (auto id : blocked) {
+            auto* key = RE::TESForm::LookupByID<RE::BGSKeyword>(id);
+            if (key && furniture.HasKeyword(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    // Turns toward a point a little each update; true once facing it.
+    bool TurnToward(RE::Actor& actor, RE::NiPoint3 point, float dt)
+    {
+        constexpr float tolerance = .3F;
+        const auto pos = actor.GetPosition();
+        const float dx = point.x - pos.x, dy = point.y - pos.y;
+        if (dx * dx + dy * dy < 1) {
+            return true;
+        }
+        const float yaw = actor.GetAngleZ();
+        const float difference = std::remainder(std::atan2(dx, dy) - yaw, 2 * std::numbers::pi_v<float>);
+        if (std::abs(difference) <= tolerance) {
+            return true;
+        }
+        const float step = std::clamp(dt, 0.0F, .2F) * 4.0F;
+        Wayfarer::Engine::SetHeading(actor, yaw + std::clamp(difference, -step, step));
+        return std::abs(difference) <= step + tolerance;
+    }
+    // A chair, bench or stool: somewhere to sit that is not a bed, workbench or special marker.
+    bool SitFurniture(RE::TESObjectREFR& ref)
+    {
+        auto* base = ref.GetBaseObject();
+        auto* furniture = base ? base->As<RE::TESFurniture>() : nullptr;
+        return furniture && furniture->furnFlags.any(RE::TESFurniture::ActiveMarker::kCanSit) &&
+               !furniture->furnFlags.any(RE::TESFurniture::ActiveMarker::kCanSleep) &&
+               furniture->workBenchData.benchType == RE::TESFurniture::WorkBenchData::BenchType::kNone &&
+               !UnsuitableRestFurniture(*furniture);
+    }
+    // A bench seats several: one per enabled sit marker.
+    int SeatCount(RE::TESObjectREFR& ref)
+    {
+        auto* base = ref.GetBaseObject();
+        auto* furniture = base ? base->As<RE::TESFurniture>() : nullptr;
+        if (!furniture) {
+            return 0;
+        }
+        const auto markers = static_cast<std::uint32_t>(furniture->furnFlags.underlying()) & 0x00FFFFFFU;
+        return std::max(1, std::popcount(markers));
+    }
+    bool SeatedIn(RE::Actor& actor, const RE::TESObjectREFR* chair)
+    {
+        auto* state = actor.AsActorState();
+        return chair && state && state->GetSitSleepState() == RE::SIT_SLEEP_STATE::kIsSitting &&
+               actor.GetOccupiedFurniture().get().get() == chair;
+    }
+    // Queues a Papyrus Actor method on someone Wayfarer does not control, such as an
+    // inn server. Asynchronous: poll for the effect.
+    template <class... Args>
+    bool CallActorMethod(RE::Actor& actor, const char* function, Args... args)
+    {
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        auto* policy = vm ? vm->GetObjectHandlePolicy() : nullptr;
+        if (!policy) {
+            return false;
+        }
+        const auto handle = policy->GetHandleForObject(actor.GetFormType(), &actor);
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> result;
+        return vm->DispatchMethodCall(handle, RE::BSFixedString("Actor"), RE::BSFixedString(function),
+                                      RE::MakeFunctionArguments(std::move(args)...), result);
     }
     RE::FormID SocialSpace(RE::Actor& actor)
     {
@@ -124,6 +285,35 @@ namespace
         condition.data.object = RE::CONDITIONITEMOBJECT::kSelf;
         RE::ConditionCheckParams params{&actor, &actor};
         return condition.IsTrue(params);
+    }
+
+    // Places a quest reaches without the party. Nether's Follower Framework never warps into
+    // the first four; the Soul Cairn admits only Serana.
+    const char* RestrictedTeleportArea(RE::PlayerCharacter& player)
+    {
+        if (auto* cell = player.GetParentCell(); cell && cell->GetFormID() == 0x165A6) {
+            return "Whiterun Underforge";
+        }
+        struct Place
+        {
+            RE::FormID id;
+            const char* file;
+            const char* name;
+        };
+        static constexpr Place places[]{{0x192B2, "Skyrim.esm", "Sovngarde"},
+                                        {0x192AB, "Skyrim.esm", "Skuldafn"},
+                                        {0x16E2B, "Dragonborn.esm", "Apocrypha"},
+                                        {0x3B8F, "Dawnguard.esm", "the Soul Cairn"}};
+        auto* data = RE::TESDataHandler::GetSingleton();
+        auto* location = player.GetCurrentLocation();
+        for (int depth = 0; data && location && depth < 32; ++depth, location = location->parentLoc) {
+            for (const auto& place : places) {
+                if (location == data->LookupForm<RE::BGSLocation>(place.id, place.file)) {
+                    return place.name;
+                }
+            }
+        }
+        return nullptr;
     }
 
     std::string_view ModeName(Wayfarer::FormationMode a_mode)
@@ -231,7 +421,7 @@ namespace Wayfarer
         companionPush.ticket = static_cast<std::int32_t>(GetTickCount64() & 0x3fffffff);
         InitializeVictoryEvents();
         logger::info("[Following] Baseline r9: September 19 r3 movement restored; "
-                     "victory r5 reactions and separate command gestures retained");
+                     "post-victory reactions shelved; separate command gestures retained");
         logger::info(
             "[Enrollment] NFF roster guard r1: active slots authoritative; teammate-only fallback disabled");
         logger::info("[PackageControl] Popup r1: explicit per-save travel and rest control");
@@ -254,7 +444,7 @@ namespace Wayfarer
             return;
         }
         UpdateFollowerDialogue(dt);
-        UpdateVictoryCleanup();
+        UpdateVictoryCleanup(dt);
         UpdateCompanionPush();
         if (recallRequest.pending) {
             auto* ui = RE::UI::GetSingleton();
@@ -315,11 +505,16 @@ namespace Wayfarer
             sandbox.Reset();
             intent.Reset();
         }
+        if (spaceChanged) {
+            // A new interior or worldspace is a new area; unlooted finds can be shown again on return.
+            ForgetLootArea();
+        }
         lastCell = player->GetParentCell();
         lastWorld = player->GetWorldspace();
         lastInterior = lastCell && lastCell->IsInteriorCell();
         lastPlayerPosition = pos;
         havePlayerPosition = true;
+        UpdateTeleportCatchup(*player, dt);
 
         if (enabled) {
             scanTimer += dt;
@@ -364,7 +559,8 @@ namespace Wayfarer
             sandbox.Reset();
         }
         auto restTuning = settings.sandbox;
-        if (regroup.active) {
+        // A companion waiting at a find would otherwise be pulled into temporary rest.
+        if (regroup.active || HasLootScouts()) {
             restTuning.automatic = false;
         }
         sandbox.Update({pos.x, pos.y}, Length({velocity.x, velocity.y}), dt,
@@ -374,12 +570,15 @@ namespace Wayfarer
         const bool handEnabled = mode == FormationMode::kCompanion && settings.handHolding.enabled &&
                                  !settings.handHolding.partner.empty();
         if (!sandbox.active && !intent.CanTravel() && !handEnabled) {
-            ReleaseAll();
+            // Standing still is when a companion most often wanders over to a find.
+            ReleaseAll(true);
             LogGlobalDiagnostic("waiting for sustained movement");
+            UpdateLootScouts(*player, dt);
             return;
         }
         LogGlobalDiagnostic(nullptr);
         UpdateBanterMotion(*player);
+        UpdateLootScouts(*player, dt);
         updateTimer += dt;
         traceTimer += dt;
         if (updateTimer < settings.updateInterval) {
@@ -395,7 +594,6 @@ namespace Wayfarer
         handsBackCooldown = std::max(0.0F, handsBackCooldown - elapsed);
         activityDispatchCooldown = std::max(0.0F, activityDispatchCooldown - elapsed);
         navigation.Collect(*player);
-        UpdateFollowerCatchup(*player, elapsed);
         UpdateTravelRoles(*player, elapsed);
         UpdateLookout(*player, elapsed);
 
@@ -421,6 +619,9 @@ namespace Wayfarer
                     }
                     continue;
                 }
+                if (follower.scout.Active()) {
+                    continue; // UpdateLootScouts drives this companion.
+                }
                 if (IsRelaxing() && follower.anchorSet && (!actor->Is3DLoaded() || actor->IsInCombat())) {
                     EndRestPose(follower, actor.get());
                     follower.travelActive = follower.sandboxActive = true;
@@ -439,6 +640,8 @@ namespace Wayfarer
                 }
             }
         }
+        UpdateTavernTable(*player, elapsed);
+        UpdateBardApplause(*player);
         UpdateSocial(elapsed);
     }
 
@@ -524,6 +727,27 @@ namespace Wayfarer
         return 0;
     }
 
+    RE::BGSRefAlias* FormationController::GetTetherHandoffAlias(std::uint32_t slot, std::int32_t ticket)
+    {
+        std::lock_guard lock(stateMutex);
+        if (!ticket || ShouldSuspendForDialogue()) {
+            return nullptr;
+        }
+        for (const auto& [id, follower] : managed) {
+            if (static_cast<std::uint32_t>(follower.slot) == slot &&
+                HandHolding::HandoffTicket(id) == ticket && HandHolding::OwnsMovement(id)) {
+                auto* alias = GetRefAlias(EnsureQuest(), FollowerAlias(slot));
+                auto actor = follower.handle.get();
+                // This is queried only at a serialized script boundary. Never
+                // clear a reassigned alias, even if the old slot ticket survives.
+                return actor && alias && (!alias->GetReference() || alias->GetReference() == actor.get())
+                           ? alias
+                           : nullptr;
+            }
+        }
+        return nullptr;
+    }
+
     void FormationController::ConfirmTetherHandoff(std::uint32_t slot, std::int32_t ticket)
     {
         std::lock_guard lock(stateMutex);
@@ -556,8 +780,13 @@ namespace Wayfarer
         dialogueGuard = {};
         regroup.Reset();
         sandbox.Reset();
+        table.Reset();
+        bardPerforming = false;
         ++generation;
         recallRequest = {};
+        catchups.clear();
+        catchupHolds.clear();
+        playerTrail.Clear();
         companionPush.Reset();
         order = PartyOrder::kTravel;
         mode = Settings::GetSingleton().Get().mode;
@@ -585,6 +814,9 @@ namespace Wayfarer
         scanTimer = Settings::GetSingleton().Get().scanInterval;
         updateTimer = traceTimer = 0.0F;
         wakeTimer = 2.0F;
+        ForgetLootArea();
+        lootScanTimer = lootClock = 0.0F;
+        static_cast<void>(Loot::ConsumeActivations());
 
         loadReleaseTime = 1.5F;
         if (restoredRelax) {
@@ -652,8 +884,7 @@ namespace Wayfarer
             roleTimer = 1.0F;
             roleCooldown = 0;
             for (auto& [id, f] : managed) {
-                f.anchorSet = false;
-                f.restAnchorZSet = false;
+                ClearRestAnchor(f);
                 f.role = -1;
             }
         }
@@ -1172,7 +1403,7 @@ namespace Wayfarer
         }
         auto eligible = [&](RE::FormID id) -> RE::Actor* {
             const auto found = managed.find(id);
-            if (found == managed.end()) {
+            if (found == managed.end() || found->second.scout.Active()) {
                 return nullptr;
             }
             auto actor = found->second.handle.get();
@@ -1396,40 +1627,87 @@ namespace Wayfarer
         if (!state || !player.Is3DLoaded() || !player.GetParentCell()) {
             return "Load a game first";
         }
-        if (player.IsInCombat() || player.GetCurrentScene()) {
-            return "Wait until combat or the scene ends";
+        if (player.GetCurrentScene()) {
+            return "Wait until the scene ends";
         }
-        if (player.IsOnMount() || state->IsSwimming() ||
-            state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal || state->IsBleedingOut() ||
-            state->IsUnconscious()) {
-            return "Stand on clear ground first";
+        // Riding shares the sitting state, and a rider may still call the party.
+        if ((!player.IsOnMount() && state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) ||
+            state->IsBleedingOut() || state->IsUnconscious()) {
+            return "Stand up first";
         }
         return nullptr;
     }
 
-    bool FormationController::RecallActorAllowed(RE::Actor& actor) const
+    const char* FormationController::CatchupPlayerRejection(RE::PlayerCharacter& player) const
     {
-        const auto* state = actor.AsActorState();
-        if (!state || actor.IsPlayerRef() || actor.IsDead() || actor.IsDisabled() || !actor.IsAIEnabled() ||
-            actor.IsInCombat() || actor.IsOnMount() || actor.GetCurrentScene() || IsSpeaking(actor) ||
-            state->IsSwimming() || state->IsBleedingOut() || state->IsUnconscious() ||
-            state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal ||
-            state->GetLifeState() == RE::ACTOR_LIFE_STATE::kRestrained ||
-            actor.AsActorValueOwner()->GetActorValue(RE::ActorValue::kWaitingForPlayer) != 0) {
-            return false;
+        if (const auto* reason = RecallPlayerRejection(player)) {
+            return reason;
         }
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        const auto id = actor.GetFormID();
-        return player && !actor.IsHostileToActor(player) && !explicitExclusions.contains(id) &&
-               (IsRegisteredFollower(id) || !CandidateRejection(actor));
+        if (player.IsDead() || player.IsInKillMove()) {
+            return "player unavailable";
+        }
+        if (auto* controls = RE::ControlMap::GetSingleton(); controls && !controls->IsMovementControlsEnabled()) {
+            return "player movement locked";
+        }
+        return nullptr;
     }
 
-    std::vector<RE::Actor*> FormationController::RecallCandidates() const
+    const char* FormationController::RecallActorRejection(RE::Actor& actor, bool automatic) const
+    {
+        const auto* state = actor.AsActorState();
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const auto id = actor.GetFormID();
+        if (!state || !player || actor.IsPlayerRef() || actor.IsDead() || actor.IsDisabled()) {
+            return "unavailable";
+        }
+        if (explicitExclusions.contains(id) || (!IsRegisteredFollower(id) && CandidateRejection(actor))) {
+            return "not a travelling companion";
+        }
+        if (actor.AsActorValueOwner()->GetActorValue(RE::ActorValue::kWaitingForPlayer) != 0) {
+            return "waiting";
+        }
+        if (!actor.IsAIEnabled()) {
+            return "AI disabled";
+        }
+        if (actor.IsHostileToActor(player)) {
+            return "hostile";
+        }
+        if (actor.GetCurrentScene() || IsSpeaking(actor)) {
+            return "in a scene";
+        }
+        if (actor.IsOnMount()) {
+            return "riding";
+        }
+        if (state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) {
+            return "sitting";
+        }
+        if (state->GetLifeState() == RE::ACTOR_LIFE_STATE::kRestrained) {
+            return "restrained";
+        }
+        if (state->IsBleedingOut() || state->IsUnconscious()) {
+            return "down";
+        }
+        if (!automatic) {
+            return nullptr;
+        }
+        // An explicit teleport may pull a companion out of a fight; catch-up never does.
+        if (actor.IsInCombat()) {
+            return "in combat";
+        }
+        if (HandHolding::OwnsMovement(id)) {
+            return "holding hands";
+        }
+        if (const auto entry = managed.find(id); entry != managed.end() && entry->second.scout.Active()) {
+            return "scouting loot";
+        }
+        return nullptr;
+    }
+
+    std::vector<RE::Actor*> FormationController::RecallRoster() const
     {
         std::vector<RE::Actor*> result;
         auto add = [&](RE::Actor* actor) {
-            if (actor && RecallActorAllowed(*actor) &&
-                std::find(result.begin(), result.end(), actor) == result.end()) {
+            if (actor && std::find(result.begin(), result.end(), actor) == result.end()) {
                 result.push_back(actor);
             }
         };
@@ -1450,7 +1728,7 @@ namespace Wayfarer
             add(RE::TESForm::LookupByID<RE::Actor>(id));
         }
         // NFF uses these active slots; vanilla uses the original follower slot.
-        // Eligibility still runs through the strict enrollment guard above.
+        // Eligibility still runs through the strict enrollment guard in RecallActorRejection.
         if (auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(0x750BA); quest && quest->IsRunning()) {
             for (std::uint32_t slot = 0; slot < 12; ++slot) {
                 auto* alias = GetRefAlias(quest, slot);
@@ -1464,43 +1742,124 @@ namespace Wayfarer
             }
             return left->GetFormID() < right->GetFormID();
         });
+        return result;
+    }
+
+    std::vector<RE::Actor*> FormationController::RecallCandidates() const
+    {
+        auto result = RecallRoster();
+        std::erase_if(result, [&](auto* actor) { return RecallActorRejection(*actor, false) != nullptr; });
         result.resize(
             std::min(result.size(), static_cast<std::size_t>(Settings::GetSingleton().Get().maxFollowers)));
         return result;
     }
 
-    std::optional<RE::NiPoint3> FormationController::RecallLanding(
-        RE::PlayerCharacter& player, RE::FormID id, int slot, const std::vector<RE::NiPoint3>& reserved) const
+    RE::NiPoint3 FormationController::PlayerGround(RE::PlayerCharacter& player)
     {
-        const auto pos = player.GetPosition();
+        // A rider's own position sits on the saddle; the mount's is on the ground.
+        RE::NiPointer<RE::Actor> mount;
+        if (player.IsOnMount() && player.GetMount(mount) && mount) {
+            return mount->GetPosition();
+        }
+        return player.GetPosition();
+    }
+
+    std::uint64_t FormationController::TravelSpaceKey(RE::PlayerCharacter& player)
+    {
+        auto* cell = player.GetParentCell();
+        if (!cell) {
+            return 0;
+        }
+        return cell->IsInteriorCell() ? reinterpret_cast<std::uintptr_t>(cell)
+                                      : reinterpret_cast<std::uintptr_t>(player.GetWorldspace());
+    }
+
+    void FormationController::RecordPlayerTrail(RE::PlayerCharacter& player)
+    {
+        const auto* state = player.AsActorState();
+        RE::NiPointer<RE::Actor> mount;
+        const bool mounted = player.IsOnMount() && player.GetMount(mount) && mount;
+        const bool grounded = state && !state->IsSwimming() && !state->IsFlying() &&
+                              !(mounted ? mount->IsInMidair() : player.IsInMidair()) &&
+                              (mounted || state->GetSitSleepState() == RE::SIT_SLEEP_STATE::kNormal);
+        const auto p = mounted ? mount->GetPosition() : player.GetPosition();
+        playerTrail.Record({p.x, p.y, p.z}, TravelSpaceKey(player), grounded);
+    }
+
+    FormationController::Landing FormationController::FindLanding(
+        RE::PlayerCharacter& player, RE::FormID id, int index, const std::vector<RE::NiPoint3>& reserved) const
+    {
+        const auto pos = PlayerGround(player);
         const auto forward = ForwardFromYaw(player.GetAngleZ());
         const auto right = RightFromForward(forward);
-        for (int attempt = 0; attempt < 6; ++attempt) {
-            const float back = 220.0F + 90.0F * (slot / 2) + 60.0F * (attempt / 2);
-            const float side = ((slot + attempt) % 2 ? 1.0F : -1.0F) * (90.0F + 45.0F * (attempt % 3));
-            const RE::NiPoint3 proposed{pos.x - forward.x * back + right.x * side,
-                                        pos.y - forward.y * back + right.y * side, pos.z};
-            auto ground = navigation.AttachmentPoint(pos, proposed);
-            if (!ground || !navigation.RestPoint(*ground)) {
-                continue;
+        const GroundPoint here{pos.x, pos.y, pos.z};
+        const auto space = TravelSpaceKey(player);
+        auto at = [](GroundPoint p) { return RE::NiPoint3{p.x, p.y, p.z}; };
+        auto clear = [&](RE::NiPoint3 point, float room) {
+            if (std::any_of(reserved.begin(), reserved.end(),
+                            [&](auto other) { return Distance2D(other, point) < room; })) {
+                return false;
             }
-            bool occupied = std::any_of(reserved.begin(), reserved.end(),
-                                        [&](auto point) { return Distance2D(point, *ground) < 100; });
+            bool open = true;
             if (auto* lists = RE::ProcessLists::GetSingleton()) {
                 Engine::ForEachHighActor(*lists, [&](RE::Actor& other) {
-                    if (other.GetFormID() != id && InSameTravelSpace(other, player) &&
-                        std::abs(other.GetPosition().z - ground->z) < 120 &&
-                        Distance2D(other.GetPosition(), *ground) < 100) {
-                        occupied = true;
+                    if (open && other.GetFormID() != id && std::abs(other.GetPosition().z - point.z) < 120 &&
+                        Distance2D(other.GetPosition(), point) < room && InSameTravelSpace(other, player)) {
+                        open = false;
                     }
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
             }
-            if (!occupied) {
-                return ground;
+            return open;
+        };
+
+        // 1. This companion's own place behind the player: a straight line of navmesh, any slope.
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            const float back = 220.0F + 90.0F * (index / 2) + 60.0F * (attempt / 2);
+            const float side = ((index + attempt) % 2 ? 1.0F : -1.0F) * (90.0F + 45.0F * (attempt % 3));
+            const RE::NiPoint3 proposed{pos.x - forward.x * back + right.x * side,
+                                        pos.y - forward.y * back + right.y * side, pos.z};
+            if (auto ground = navigation.LandingPoint(pos, proposed); ground && clear(*ground, 100)) {
+                return {*ground, "behind"};
             }
         }
-        return std::nullopt;
+        // 2. Where the player walked. Walkable a moment ago and joined to the player by that
+        //    route, so it holds around corners, on stairs and in narrow passages.
+        for (const auto& point : playerTrail.Behind(here, space, 200, 1200, 150, 800)) {
+            if (clear(at(point), 90)) {
+                return {at(point), "trail"};
+            }
+        }
+        // 3. Anywhere reachable on foot nearby, behind the player first.
+        for (const auto& point : RankLandings(navigation.LandingSpots(pos, 120, 700), here, forward, 320)) {
+            if (clear(at(point), 90)) {
+                return {at(point), "navmesh"};
+            }
+        }
+        // 4. Beside the player, as Nether's Follower Framework does, and finally the player's own
+        //    footing. Character collision separates them; this tier never refuses.
+        for (const auto side : {Vec2{-forward.x, -forward.y}, Vec2{right.x, right.y}, Vec2{-right.x, -right.y}}) {
+            const RE::NiPoint3 proposed{pos.x + side.x * 80, pos.y + side.y * 80, pos.z};
+            if (auto ground = navigation.LandingPoint(pos, proposed); ground && clear(*ground, 60)) {
+                return {*ground, "beside"};
+            }
+        }
+        if (const auto steps = playerTrail.Behind(here, space, 0, 400, 40, 400); !steps.empty()) {
+            return {at(steps.front()), "footsteps"};
+        }
+        return {pos, "player"};
+    }
+
+    void FormationController::TeleportCompanion(RE::Actor& actor, RE::NiPoint3 landing,
+                                                RE::PlayerCharacter& player)
+    {
+        if (auto entry = managed.find(actor.GetFormID()); entry != managed.end()) {
+            ReleaseTravel(entry->second, &actor);
+            ClearRestAnchor(entry->second);
+        }
+        actor.MoveTo(&player);
+        actor.SetPosition(landing, true);
+        actor.EvaluatePackage(false, true);
     }
 
     const char* FormationController::CompanionPushRejection(RE::Actor& actor) const
@@ -1657,18 +2016,22 @@ namespace Wayfarer
         std::vector<RE::NiPoint3> reserved;
         for (auto* actor : candidates) {
             const auto id = actor->GetFormID();
-            auto landing = RecallLanding(player, id, static_cast<int>(reserved.size()), reserved);
-            if (!landing) {
-                continue;
+            const auto landing = FindLanding(player, id, static_cast<int>(reserved.size()), reserved);
+            TeleportCompanion(*actor, landing.point, player);
+            reserved.push_back(landing.point);
+            logger::info("[PartyRecall] Summoned {} ({:08X}) via {} to ({:.0f}, {:.0f}, {:.0f})",
+                         actor->GetName(), id, landing.source, landing.point.x, landing.point.y,
+                         landing.point.z);
+        }
+        // Name whoever stayed behind, and why, so a missing companion is never a mystery.
+        std::vector<std::string> stayed;
+        for (auto* actor : RecallRoster()) {
+            const char* rejection = RecallActorRejection(*actor, false);
+            const std::string_view reason = rejection ? rejection : "";
+            if (!reason.empty() && reason != "unavailable" && reason != "not a travelling companion") {
+                stayed.push_back(fmt::format("{} ({})", actor->GetName(), reason));
+                logger::info("[PartyRecall] Left {} ({:08X}): {}", actor->GetName(), actor->GetFormID(), reason);
             }
-            if (auto entry = managed.find(id); entry != managed.end()) {
-                ReleaseTravel(entry->second, actor);
-            }
-            actor->MoveTo(&player);
-            actor->SetPosition(*landing, true);
-            actor->EvaluatePackage(false, true);
-            reserved.push_back(*landing);
-            logger::info("[PartyRecall] Summoned {} ({:08X})", actor->GetName(), id);
         }
         if (!reserved.empty()) {
             ReleaseAll();
@@ -1676,14 +2039,18 @@ namespace Wayfarer
             intent.Reset();
             for (auto& [id, follower] : managed) {
                 static_cast<void>(id);
-                follower.anchorSet = false;
-                follower.restAnchorZSet = false;
+                ClearRestAnchor(follower);
             }
             scanTimer = Settings::GetSingleton().Get().scanInterval;
         }
-        Notify(reserved.empty() ? "No clear landing space found for the party."
-                                : fmt::format("Teleported {} companion(s) nearby. {} could not be placed.",
-                                              reserved.size(), candidates.size() - reserved.size()));
+        auto message = reserved.empty()
+                           ? std::string{"No travelling companions to teleport."}
+                           : fmt::format("Teleported {} companion{}.", reserved.size(), reserved.size() == 1 ? "" : "s");
+        if (!stayed.empty()) {
+            message += fmt::format(" Stayed: {}{}", stayed.front(),
+                                   stayed.size() > 1 ? fmt::format(" and {} more", stayed.size() - 1) : "");
+        }
+        Notify(message);
     }
 
     void FormationController::ToggleTemporaryRelaxation(std::uint64_t expectedGeneration)
@@ -1706,47 +2073,80 @@ namespace Wayfarer
                                           : "Temporary relaxation disabled.");
     }
 
-    void FormationController::UpdateFollowerCatchup(RE::PlayerCharacter& player, float dt)
+    void FormationController::UpdateTeleportCatchup(RE::PlayerCharacter& player, float dt)
     {
-        const auto& settings = Settings::GetSingleton().Get();
-        const auto pos = player.GetPosition();
-        for (int slot = 0; slot < PARTY_CAPACITY; ++slot) {
-            for (auto& [id, f] : managed) {
-                if (f.slot != slot) {
-                    continue;
-                }
-                auto actor = f.handle.get();
-                const auto* state = actor ? actor->AsActorState() : nullptr;
-                const bool permitted =
-                    settings.teleportCatchup && !sandbox.active && !IsRelaxing() && actor && state &&
-                    InSameTravelSpace(*actor, player) && !actor->IsDead() && !actor->IsDisabled() &&
-                    actor->IsAIEnabled() && !actor->IsInCombat() && !player.IsInCombat() &&
-                    !actor->IsSneaking() && !actor->IsOnMount() && !actor->GetCurrentScene() &&
-                    !IsSpeaking(*actor) && !state->IsSwimming() && !state->IsBleedingOut() &&
-                    !state->IsUnconscious() && !state->IsWeaponDrawn() &&
-                    state->GetSitSleepState() == RE::SIT_SLEEP_STATE::kNormal &&
-                    state->GetLifeState() != RE::ACTOR_LIFE_STATE::kRestrained &&
-                    !explicitExclusions.contains(id) &&
-                    actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kWaitingForPlayer) == 0 &&
-                    (IsRegisteredFollower(id) || !CandidateRejection(*actor));
-                const auto at = actor ? actor->GetPosition() : pos;
-                const float distance = std::hypot(Distance2D(at, pos), at.z - pos.z);
-                if (!f.catchup.Update(dt, permitted, distance, settings.teleportDistance)) {
-                    continue;
-                }
-                auto landing = RecallLanding(player, id, slot);
-                f.catchup.Attempt(landing.has_value());
-                if (!landing) {
-                    continue;
-                }
-                ReleaseTravel(f, actor.get());
-                actor->MoveTo(&player);
-                actor->SetPosition(*landing, true);
-                actor->EvaluatePackage(false, true);
-                logger::info("[Catchup] recalled {} ({:08X}) from {:.0f} units to ({:.0f}, {:.0f}, {:.0f})",
-                             actor->GetName(), id, distance, landing->x, landing->y, landing->z);
-            }
+        RecordPlayerTrail(player);
+        catchupTimer += dt;
+        if (catchupTimer < .25F) {
+            return;
         }
+        const float elapsed = std::min(catchupTimer, 1.0F);
+        catchupTimer = 0;
+        const auto& settings = Settings::GetSingleton().Get();
+        // A Relax order keeps companions at their camp on purpose, even after the player leaves.
+        if (!enabled || !settings.teleportCatchup || IsRelaxing()) {
+            catchups.clear();
+            catchupHolds.clear();
+            return;
+        }
+        // Temporary rest lets companions roam; that is not being lost.
+        const float threshold = sandbox.active
+                                    ? std::max(settings.teleportDistance, settings.sandbox.maxRadius + 800.0F)
+                                    : settings.teleportDistance;
+        const char* playerReason = CatchupPlayerRejection(player);
+        if (!playerReason) {
+            playerReason = RestrictedTeleportArea(player);
+        }
+        const auto pos = PlayerGround(player);
+        const auto maxFollowers = static_cast<std::size_t>(settings.maxFollowers);
+        std::unordered_set<RE::FormID> present;
+        std::vector<RE::NiPoint3> reserved;
+        std::size_t eligible = 0;
+        bool collected = false;
+        for (auto* actor : RecallRoster()) {
+            const auto id = actor->GetFormID();
+            present.insert(id);
+            const char* reason = playerReason ? playerReason : RecallActorRejection(*actor, true);
+            if (!reason && ++eligible > maxFollowers) {
+                reason = "iMaxFollowers reached";
+            }
+            // Another interior or worldspace, or an exterior cell too far away to be loaded.
+            const bool separated = !actor->Is3DLoaded() || !InSameTravelSpace(*actor, player);
+            const auto at = actor->GetPosition();
+            const float distance = separated ? std::numeric_limits<float>::infinity()
+                                             : CatchupDistance({at.x, at.y, at.z}, {pos.x, pos.y, pos.z});
+            // Say once why a distant companion is being left where they are.
+            const std::string hold = reason && (separated || distance >= threshold) ? reason : "";
+            if (auto& last = catchupHolds[id]; last != hold) {
+                if (!hold.empty()) {
+                    logger::info("[Catchup] holding {} ({:08X}) {}: {}", actor->GetName(), id,
+                                 separated ? std::string{"in another cell"} : fmt::format("at {:.0f} units", distance),
+                                 hold);
+                }
+                last = hold;
+            }
+            auto& state = catchups[id];
+            if (!state.Update(elapsed, !reason, distance, threshold, separated)) {
+                continue;
+            }
+            if (!collected) {
+                navigation.Collect(player);
+                collected = true;
+            }
+            const auto entry = managed.find(id);
+            const int index =
+                entry != managed.end() ? std::max(entry->second.slot, 0) : static_cast<int>(reserved.size());
+            const auto landing = FindLanding(player, id, index, reserved);
+            state.Attempt(true);
+            TeleportCompanion(*actor, landing.point, player);
+            reserved.push_back(landing.point);
+            logger::info("[Catchup] recalled {} ({:08X}) from {} via {} to ({:.0f}, {:.0f}, {:.0f})",
+                         actor->GetName(), id,
+                         separated ? std::string{"another cell"} : fmt::format("{:.0f} units", distance),
+                         landing.source, landing.point.x, landing.point.y, landing.point.z);
+        }
+        std::erase_if(catchups, [&](const auto& entry) { return !present.contains(entry.first); });
+        std::erase_if(catchupHolds, [&](const auto& entry) { return !present.contains(entry.first); });
     }
 
     void FormationController::UpdateTravelRoles(RE::PlayerCharacter& player, float dt)
@@ -1909,8 +2309,7 @@ namespace Wayfarer
                                           float dt)
     {
         const auto& settings = Settings::GetSingleton().Get();
-        f.anchorSet = false;
-        f.restAnchorZSet = false;
+        ClearRestAnchor(f);
         auto* quest = EnsureQuest();
         if (!quest || !quest->IsRunning()) {
             ReleaseTravel(f, &actor);
@@ -1928,7 +2327,7 @@ namespace Wayfarer
             f.restRecovery.Reset();
             f.activitySearch.Reset();
             f.activityTarget = {};
-            f.socialHold = false;
+            f.socialHold = f.socialWalk = false;
             f.socialPhase = 0;
             f.patron = {};
             f.patronGesture = false;
@@ -1945,11 +2344,23 @@ namespace Wayfarer
         const auto playerPos = player.GetPosition();
         const auto handApproach = HandHolding::GetApproach();
         const bool handGuided = handApproach.actor == actor.GetFormID();
-        if (!SetHandApproachRadius(f, handGuided)) {
+        const bool classicHands = handGuided && settings.handHolding.method == HandHolding::Method::Classic;
+        const bool handHoldPosition = handGuided && !classicHands && handApproach.holdPosition;
+        const bool handAttached = classicHands && HandHolding::IsAttached(actor.GetFormID());
+        const bool handLocomotion = classicHands && (handAttached || handApproach.closing);
+        RE::NiPoint3 handVelocity{};
+        if (classicHands) {
+            player.GetLinearVelocity(handVelocity);
+        }
+        if (handLocomotion) {
+            handVelocity = {handApproach.velocity.x, handApproach.velocity.y, 0};
+        }
+        const float handSpeed = std::hypot(handVelocity.x, handVelocity.y);
+        if (!SetHandApproachRadius(f, handGuided && !classicHands)) {
             ReleaseTravel(f, &actor);
             return;
         }
-        const auto travelTuning = HandHolding::ApproachTuning(settings.travel, handGuided);
+        const auto travelTuning = HandHolding::ApproachTuning(settings.travel, handGuided && !classicHands);
         const bool interior = player.GetParentCell()->IsInteriorCell();
         const float playerDistance = Distance2D(pos, playerPos);
         f.distantCatchup = DistantCatchup(f.distantCatchup, playerDistance, settings.distantCatchupStart,
@@ -1987,7 +2398,7 @@ namespace Wayfarer
             return;
         }
 
-        if (!f.travelActive && !f.individual.Ready(urgent, settings.travel.individuality)) {
+        if (!f.travelActive && !handGuided && !f.individual.Ready(urgent, settings.travel.individuality)) {
             return;
         }
         const auto planned =
@@ -2004,10 +2415,26 @@ namespace Wayfarer
         const auto personalIntent = intent.WithDirection(f.individual.Direction());
         Vec2 desired = personalIntent.GoalAt(mode, f.roleOffset, interior, settings.preferredSide,
                                              settings.travel, f.roleSetback, rearBlend);
-        const auto direction = handGuided ? ForwardFromYaw(player.GetAngleZ()) : personalIntent.Direction();
+        const auto direction = classicHands
+                                   ? HandHolding::LocomotionDirection(handAttached, handApproach.heading,
+                                                                      {handVelocity.x, handVelocity.y},
+                                                                      ForwardFromYaw(player.GetAngleZ()))
+                               : handGuided ? ForwardFromYaw(player.GetAngleZ())
+                                            : personalIntent.Direction();
+        const float handLead = HandHolding::LocomotionLead(handSpeed);
         if (handGuided) {
-            desired =
-                HandHolding::ApproachPoint({playerPos.x, playerPos.y}, player.GetAngleZ(), handApproach.side);
+            desired = handHoldPosition ? Vec2{handApproach.position.x, handApproach.position.y}
+                                       : HandHolding::ApproachPoint({playerPos.x, playerPos.y},
+                                                                    player.GetAngleZ(), handApproach.side);
+        }
+        if (classicHands) {
+            const auto point =
+                HandHolding::SeekPoint({playerPos.x, playerPos.y, playerPos.z}, player.GetAngleZ(),
+                                       handApproach.side, handApproach.spacing);
+            desired = {point.x, point.y};
+        }
+        if (handLocomotion) {
+            desired = {pos.x + direction.x * handLead, pos.y + direction.y * handLead};
         }
         const Vec2 ordinaryAim = handGuided ? desired : personalIntent.RouteGoal(desired, mode, interior);
         const Vec2 rearAim =
@@ -2016,7 +2443,17 @@ namespace Wayfarer
                        ordinaryAim.y + (rearAim.y - ordinaryAim.y) * rearBlend};
         const float lead = Length({aim.x - desired.x, aim.y - desired.y});
         ObstaclePlan corridor;
-        auto target = settings.forwardCollision && !handGuided
+        auto target = handHoldPosition
+                          ? navigation.AttachmentPoint(pos, {handApproach.position.x, handApproach.position.y,
+                                                             handApproach.position.z})
+                      : handLocomotion
+                          ? HandHolding::LocomotionTarget(
+                                pos, direction, handLead,
+                                [&](RE::NiPoint3 from, Vec2 goal, Vec2 facing) {
+                                    return navigation.Resolve(from, goal, facing);
+                                },
+                                [&](RE::NiPoint3 from) { return navigation.AttachmentPoint(from, from); })
+                      : settings.forwardCollision && !handGuided
                           ? navigation.ResolveClear(player, aim, direction, corridor)
                           : navigation.Resolve(playerPos, aim, direction);
         bool connectedRoute = false;
@@ -2114,11 +2551,13 @@ namespace Wayfarer
             (target->x - desired.x) * direction.x + (target->y - desired.y) * direction.y, 0.0F, lead);
         const float paceDistance =
             f.avoidance.active ? std::min(distance, 100.0F) : std::max(0.0F, distance - routedLead);
-        auto pace = ChoosePace(intent.Speed(), paceDistance, f.goal.pace, intent.IsMoving());
+        auto pace = ChoosePace(classicHands ? handSpeed : intent.Speed(), handLocomotion ? 0 : paceDistance,
+                               f.goal.pace, classicHands ? handSpeed > 5 : intent.IsMoving());
         if (f.avoidance.active && pace == TravelPace::kRun) {
             pace = TravelPace::kJog;
         }
-        if (obstacleChanged ||
+        const bool holdRepath = handHoldPosition && HandHolding::RepathArrivalHold(f.goal, candidate);
+        if (classicHands || holdRepath || obstacleChanged ||
             f.goal.ShouldCommit(candidate, actorXY, pace, travelTuning, intent.Speed(), intent.IsMoving())) {
 
             package->packData.packFlags.set(RE::PACKAGE_DATA::GeneralFlag::kPreferredSpeed);
@@ -2130,7 +2569,11 @@ namespace Wayfarer
             f.goal.Commit(candidate, actorXY, pace);
             f.travelActive = true;
         }
-        if (f.goal.ShouldRepath(actorXY, intent.Speed(), intent.IsMoving(), ownsPackage, travelTuning) ||
+        if (holdRepath ||
+            (handLocomotion
+                 ? HandHolding::RepathAttached(f.goal, actorXY, handSpeed, ownsPackage, travelTuning)
+                 : f.goal.ShouldRepath(actorXY, intent.Speed(), intent.IsMoving(), ownsPackage,
+                                       travelTuning)) ||
             (obstacleChanged && ownsPackage && f.goal.sinceRepath >= .30F)) {
             auto* followerAlias = GetRefAlias(quest, FollowerAlias(f.slot));
             if (followerAlias && followerAlias->GetReference() == &actor) {
@@ -2159,21 +2602,29 @@ namespace Wayfarer
             float desiredScale = TravelSpeedTarget(normalScale, settings.travel.maxSpeedScale,
                                                    f.distantCatchup, Distance2D(pos, playerPos), paceDistance,
                                                    settings.distantCatchupStart, settings.distantCatchupEnd);
+            if (classicHands) {
+                const float nominal = pace == TravelPace::kRun   ? 335.0F
+                                      : pace == TravelPace::kJog ? 245.0F
+                                                                 : 100.0F;
+                const float seekSpeed =
+                    std::max(100.0F, handSpeed) + std::clamp(paceDistance * .8F, 0.0F, 180.0F);
+                desiredScale = std::clamp((handLocomotion ? handSpeed : seekSpeed) / nominal, .65F, 3.5F);
+            }
             if (f.avoidance.active) {
                 desiredScale = std::min(desiredScale, 1.15F);
             }
-            f.speedScale = SmoothSpeedScale(f.speedScale, desiredScale, dt);
+            f.speedScale = classicHands ? desiredScale : SmoothSpeedScale(f.speedScale, desiredScale, dt);
 
             f.speedScale = std::min(f.speedScale, desiredScale + .12F);
             TravelSpeed::Set(static_cast<std::uint32_t>(f.slot), actor.GetFormID(), f.speedScale,
-                             settings.travel.maxSpeedScale, settings.distantCatchupEnd);
+                             classicHands ? 3.5F : settings.travel.maxSpeedScale, settings.distantCatchupEnd);
         }
         if (settings.traceMovement && traceDue) {
             if (handGuided) {
                 logger::info("[HandHolding/Approach] {} target=({:.1f},{:.1f}) remaining={:.1f} "
-                             "radius={:.0f} ownsPackage={} normalPace=true",
+                             "radius={:.0f} ownsPackage={} classic={} arrivalHold={}",
                              actor.GetName(), candidate.x, candidate.y, distance, travelTuning.arrivalRadius,
-                             ownsPackage);
+                             ownsPackage, classicHands, handHoldPosition);
             }
             RE::NiPoint3 velocity{};
             actor.GetLinearVelocity(velocity);
@@ -2232,7 +2683,23 @@ namespace Wayfarer
         if (f.restPose.kind == 1 && f.restPose.started && actor && actor->Is3DLoaded() && !actor->IsDead() &&
             !actor->IsInCombat() && !actor->GetCurrentScene() && !IsSpeaking(*actor) &&
             !ShouldSuspendForDialogue()) {
-            actor->NotifyAnimationGraph("IdleStop");
+            if (f.activity == RestActivity::Kneel || f.activity == RestActivity::WarmHandsCrouched) {
+                // Crouched loops stand up through the furniture-style exit when they have one.
+                if (!actor->NotifyAnimationGraph("IdleChairExitStart")) {
+                    actor->NotifyAnimationGraph("IdleStop");
+                }
+                f.poseExitCheck = 3.5F;
+            }
+            else {
+                actor->NotifyAnimationGraph("IdleStop");
+            }
+        }
+        if (f.restPose.kind == 2 && f.activity == RestActivity::TableSeat) {
+            f.tableSeat = {};
+            f.tableIdle = 0;
+            f.tableIdleActive = false;
+            f.tableLook = 0;
+            f.tableRest = 60; // Stretch their legs before sitting back down.
         }
         if (f.restPose.kind) {
             f.restPose.End(actor ? actor->GetFormID() : static_cast<std::uint32_t>(f.slot));
@@ -2247,14 +2714,31 @@ namespace Wayfarer
     RE::TESObjectREFR* FormationController::GetRestSeat(std::uint32_t slot)
     {
         std::lock_guard lock(stateMutex);
-        if (slot >= PARTY_CAPACITY || !Settings::GetSingleton().Get().sandbox.extraPoses) {
+        if (slot >= PARTY_CAPACITY) {
+            return nullptr;
+        }
+        for (auto& [id, f] : managed) {
+            if (f.slot == static_cast<int>(slot) && f.tableSeat.get()) {
+                return f.tableSeat.get().get(); // The chair at the inn table.
+            }
+        }
+        const auto& tuning = Settings::GetSingleton().Get().sandbox;
+        if (!tuning.extraPoses && !tuning.areaActivities) {
             return nullptr;
         }
         return seatPool[slot].get().get();
     }
 
+    RE::TESObjectREFR* FormationController::SeatFor(ManagedFollower& f)
+    {
+        if (auto chair = f.tableSeat.get()) {
+            return chair.get();
+        }
+        return f.slot >= 0 ? seatPool[static_cast<std::size_t>(f.slot)].get().get() : nullptr;
+    }
+
     RE::TESObjectREFR* FormationController::EnsureRestSeat(ManagedFollower& f, RE::Actor& actor,
-                                                           RE::NiPoint3 point)
+                                                           RE::NiPoint3 point, float yaw)
     {
         auto& pooled = seatPool[f.slot];
         if (!pooled.get()) {
@@ -2281,6 +2765,7 @@ namespace Wayfarer
             }
             ref->MoveTo(&actor);
             ref->SetPosition(point);
+            Engine::SetReferenceAngle(*ref, {0, 0, yaw}); // They sit the way the marker faces.
             return ref.get();
         }
         auto* base = RE::TESForm::LookupByID<RE::TESBoundObject>(0x108D3C);
@@ -2288,33 +2773,47 @@ namespace Wayfarer
             return nullptr;
         }
         pooled = RE::TESDataHandler::GetSingleton()->CreateReferenceAtLocation(
-            base, point, actor.GetAngle(), actor.GetParentCell(), actor.GetWorldspace(), nullptr, nullptr,
+            base, point, RE::NiPoint3{0, 0, yaw}, actor.GetParentCell(), actor.GetWorldspace(), nullptr, nullptr,
             RE::ObjectRefHandle{}, true, false);
         return pooled.get().get();
     }
 
     void FormationController::UpdateRestPose(ManagedFollower& f, RE::Actor& actor, float dt)
     {
+        if (f.poseExitCheck > 0) {
+            // Nobody walks off frozen in a crouch or kneel the exit event did not end.
+            f.poseExitCheck -= dt;
+            bool playing = false;
+            if (f.poseExitCheck <= 0 && !f.restPose.kind && !actor.GetOccupiedFurniture().get() &&
+                !IsSpeaking(actor) && !actor.GetCurrentScene() &&
+                actor.GetGraphVariableBool("bIdlePlaying", playing) && playing) {
+                actor.NotifyAnimationGraph("IdleForceDefaultState");
+                logger::info("[RestPose] {} was still posed after standing; cleared it", actor.GetName());
+            }
+        }
         if (f.restRecovery.walking || lookout.actor == actor.GetFormID()) {
+            f.poseTurn = false;
             return;
         }
         const auto& tuning = Settings::GetSingleton().Get().sandbox;
         const auto context = ContextFor(actor);
         const bool refreshments = SettledRefreshments(context, tuning);
-        if (!tuning.extraPoses && (!refreshments || (f.restPose.kind && f.activity != RestActivity::Eat &&
-                                                     f.activity != RestActivity::Drink))) {
+        if (!AnyRestPoses(context, tuning)) {
             if (f.restPose.kind) {
                 EndRestPose(f, &actor);
             }
+            f.poseTurn = false;
             return;
         }
         auto& pose = f.restPose;
         const auto id = actor.GetFormID();
         pose.Init(id);
         auto* state = actor.AsActorState();
-        if (!state || actor.IsInCombat() || actor.GetCurrentScene() || IsSpeaking(actor) ||
+        // Seated companions may talk; everyone else stops posing to speak.
+        if (!state || actor.IsInCombat() || actor.GetCurrentScene() || (IsSpeaking(actor) && pose.kind != 2) ||
             state->IsWeaponDrawn() || actor.IsSneaking() || state->IsSwimming() || actor.IsOnMount()) {
             EndRestPose(f, &actor);
+            f.poseTurn = false;
             return;
         }
         auto* data = RE::TESDataHandler::GetSingleton();
@@ -2324,8 +2823,8 @@ namespace Wayfarer
                 pose.kind == 2 ? SeatPackageLocal(f.slot) : PosePackageLocal(f.slot), plugin);
             bool ready = actor.GetCurrentPackage() == package;
             if (pose.kind == 2) {
-                auto seat = seatPool[f.slot].get();
-                ready = ready && seat && actor.GetOccupiedFurniture().get().get() == seat.get() &&
+                auto* seat = SeatFor(f);
+                ready = ready && seat && actor.GetOccupiedFurniture().get().get() == seat &&
                         state->GetSitSleepState() == RE::SIT_SLEEP_STATE::kIsSitting;
             }
             else if (!pose.started) {
@@ -2346,12 +2845,13 @@ namespace Wayfarer
             return;
         }
 
-        if (f.socialHold || social.Listener(id)) {
+        if (f.socialHold || social.Involves(id)) {
             pose.cooldown = 12.0F + RestPose::Mix(id + pose.sequence) % 13;
+            f.poseTurn = false;
             return;
         }
         pose.Tick(dt, false);
-        if (pose.cooldown > 0 || social.Listener(id) || actor.GetOccupiedFurniture().get() ||
+        if (pose.cooldown > 0 || social.Involves(id) || actor.GetOccupiedFurniture().get() ||
             state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) {
             return;
         }
@@ -2373,18 +2873,56 @@ namespace Wayfarer
         if (driven || f.patronTimer > 0) {
             return;
         }
+        if (f.poseTurn) {
+            // Facing the fire or shrine first; the pose was already chosen.
+            if (f.feature != AreaFeature::None && Distance2D(actor.GetPosition(), f.featurePoint) > 420) {
+                f.poseTurn = false;
+                f.feature = AreaFeature::None;
+                return;
+            }
+            if (TurnToward(actor, f.poseFacePoint, dt)) {
+                f.poseTurn = false;
+                BeginRestPose(f, actor, 1, f.feature);
+            }
+            return;
+        }
 
-        if (refreshments && std::count_if(managed.begin(), managed.end(), [](const auto& entry) {
-                                return entry.second.restPose.kind &&
-                                       (entry.second.activity == RestActivity::Eat ||
-                                        entry.second.activity == RestActivity::Drink);
-                            }) >= 2) {
+        const auto place = PlaceFor(actor);
+        const auto roll = RestPose::Mix(id + pose.sequence * 3571);
+        auto at = AreaFeature::None;
+        if (f.pendingFeature != AreaFeature::None &&
+            Distance2D(actor.GetPosition(), f.pendingFeaturePoint) > (FacesFeature(f.pendingFeature) ? 420.0F : 720.0F)) {
+            f.pendingFeature = AreaFeature::None; // Not actually there.
+            f.pendingFeatureRef = {};
+        }
+        if (f.pendingFeature != AreaFeature::None) {
+            // Just arrived at a fire, shrine, shore or lookout.
+            at = f.feature = std::exchange(f.pendingFeature, AreaFeature::None);
+            f.featureRef = std::exchange(f.pendingFeatureRef, {});
+            f.featurePoint = f.pendingFeaturePoint;
+            f.activity = FeatureActivity(at, place, roll, tuning);
+        }
+        else if (tuning.areaActivities && f.feature != AreaFeature::None &&
+                 Distance2D(actor.GetPosition(), f.featurePoint) < (FacesFeature(f.feature) ? 320.0F : 720.0F) &&
+                 roll % 4 != 0) {
+            at = f.feature;
+            f.activity = FeatureFollowUp(at, place, roll >> 3, tuning);
+        }
+        else {
+            f.feature = AreaFeature::None;
+            f.featureRef = {};
+            f.activity = ChoosePlaceActivity(place, context, roll, tuning, TraitsFor(actor));
+        }
+        if ((f.activity == RestActivity::Eat || f.activity == RestActivity::Drink) && refreshments &&
+            std::count_if(managed.begin(), managed.end(), [](const auto& entry) {
+                return entry.second.restPose.kind && (entry.second.activity == RestActivity::Eat ||
+                                                      entry.second.activity == RestActivity::Drink);
+            }) >= 2) {
+            ++pose.sequence;
+            pose.cooldown = 8;
             return;
         }
         int kind = 1;
-        const auto roll = RestPose::Mix(id + pose.sequence * 3571);
-        f.activity = !tuning.extraPoses && refreshments ? ChooseRefreshment(context, roll)
-                                                        : ChooseRestActivity(context, roll, tuning);
         if (f.activity == RestActivity::Ground) {
             auto point = navigation.RestPoint(actor.GetPosition());
             float water{};
@@ -2397,7 +2935,11 @@ namespace Wayfarer
                         break;
                     }
                 }
-                if (clear && EnsureRestSeat(f, actor, *point)) {
+                // By a fire, sit facing it; otherwise the way they already face.
+                const float yaw = at == AreaFeature::Fire ? std::atan2(f.featurePoint.x - point->x,
+                                                                       f.featurePoint.y - point->y)
+                                                          : actor.GetAngleZ();
+                if (clear && EnsureRestSeat(f, actor, *point, yaw)) {
                     kind = 2;
                 }
             }
@@ -2408,27 +2950,24 @@ namespace Wayfarer
             return;
         }
         if (kind != 2 && f.activity == RestActivity::Ground) {
-            ++pose.sequence;
-            pose.cooldown = 15;
-            return;
-        }
-        if (f.activity == RestActivity::Stand) {
-            const bool occupied = std::any_of(managed.begin(), managed.end(), [](const auto& entry) {
-                return entry.second.restPose.kind == 1 && entry.second.activity == RestActivity::Stand;
-            });
-            if (occupied || handsBackCooldown > 0) {
+            if (at == AreaFeature::Fire) {
+                f.activity = RestActivity::WarmHandsCrouched; // No room to sit: crouch at the fire instead.
+            }
+            else {
                 ++pose.sequence;
-                pose.cooldown = 12.0F + RestPose::Mix(id + pose.sequence) % 13;
+                pose.cooldown = 15;
                 return;
             }
-            handsBackCooldown = 90.0F + RestPose::Mix(id + pose.sequence) % 61;
         }
-        pose.Begin(kind, id);
-        f.restIdleRequested = false;
-        if (FiniteRestActivity(f.activity)) {
-            pose.duration = 7.0F + RestPose::Mix(id + pose.sequence) % 4;
+        if (kind == 1 && at != AreaFeature::None) {
+            // Face the fire or shrine; shore and lookout spots store a point out over the view.
+            f.poseFacePoint = f.featurePoint;
+            if (!TurnToward(actor, f.poseFacePoint, dt)) {
+                f.poseTurn = true;
+                return;
+            }
         }
-        SetPoseFlag(f.slot, kind);
+        BeginRestPose(f, actor, kind, at);
     }
 
     void FormationController::SetSocialFlag(int slot, int phase)
@@ -2529,7 +3068,7 @@ namespace Wayfarer
         navigation.Collect(player);
         for (auto& [id, f] : managed) {
             if (id == speaker->GetFormID() || f.awarenessTried || !f.travelActive || f.restPose.kind ||
-                f.restRecovery.walking || social.Listener(id) || lookout.actor == id) {
+                f.restRecovery.walking || social.Involves(id) || lookout.actor == id) {
                 continue;
             }
             auto actor = f.handle.get();
@@ -2632,7 +3171,7 @@ namespace Wayfarer
                     actor->IsSneaking() || actor->IsOnMount() || state->IsSwimming() ||
                     actor->GetOccupiedFurniture().get() ||
                     state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal || actor->GetCurrentScene() ||
-                    IsSpeaking(*actor) || f.restPose.kind || f.restRecovery.walking || social.Listener(id) ||
+                    IsSpeaking(*actor) || f.restPose.kind || f.restRecovery.walking || social.Involves(id) ||
                     f.patronTimer > 0 || Length({motion.x, motion.y}) > 12 || driven) {
                     continue;
                 }
@@ -2706,6 +3245,71 @@ namespace Wayfarer
         return marker.get();
     }
 
+    RE::NiPoint3 FormationController::RestCenter(const ManagedFollower& f, const RE::TESObjectREFR& anchor)
+    {
+        auto center = f.restHomeSet ? f.restHome : anchor.GetPosition();
+        if (f.restAnchorZSet) {
+            center.z = f.restAnchorZ;
+        }
+        return center;
+    }
+
+    void FormationController::ClearRestAnchor(ManagedFollower& f)
+    {
+        f.anchorSet = f.restAnchorZSet = f.restHomeSet = f.focused = f.poseTurn = false;
+        f.feature = f.pendingFeature = AreaFeature::None;
+        f.featureRef = f.pendingFeatureRef = {};
+    }
+
+    void FormationController::FocusRest(ManagedFollower& f, RE::Actor& actor, RE::TESObjectREFR& anchor,
+                                        float radius)
+    {
+        anchor.MoveTo(&actor);
+        anchor.SetPosition(actor.GetPosition());
+        f.focused = true;
+        f.focusRadius = radius;
+    }
+
+    int FormationController::FeatureUsers(RE::FormID self, RE::FormID feature) const
+    {
+        int users = 0;
+        for (const auto& [id, other] : managed) {
+            if (id == self) {
+                continue;
+            }
+            auto at = other.featureRef.get();
+            auto heading = other.restRecovery.walking ? other.pendingFeatureRef.get() : RE::NiPointer<RE::TESObjectREFR>{};
+            users += (at && at->GetFormID() == feature) || (heading && heading->GetFormID() == feature);
+        }
+        return users;
+    }
+
+    void FormationController::BeginRestPose(ManagedFollower& f, RE::Actor& actor, int kind, AreaFeature at)
+    {
+        auto& pose = f.restPose;
+        const auto id = actor.GetFormID();
+        if (f.activity == RestActivity::Stand) {
+            const bool occupied = std::any_of(managed.begin(), managed.end(), [](const auto& entry) {
+                return entry.second.restPose.kind == 1 && entry.second.activity == RestActivity::Stand;
+            });
+            if (occupied || handsBackCooldown > 0) {
+                ++pose.sequence;
+                pose.cooldown = 12.0F + RestPose::Mix(id + pose.sequence) % 13;
+                return;
+            }
+            handsBackCooldown = 90.0F + RestPose::Mix(id + pose.sequence) % 61;
+        }
+        pose.Begin(kind, id);
+        f.restIdleRequested = false;
+        pose.duration = RestPoseSeconds(f.activity, at, RestPose::Mix(id + pose.sequence * 31));
+        SetPoseFlag(f.slot, kind);
+        if (at != AreaFeature::None || f.activity >= RestActivity::LookFar) {
+            logger::info("[AreaActivity] {} {}{}{} in the {}", actor.GetName(), RestActivityName(f.activity),
+                         at != AreaFeature::None ? " at the " : "", at != AreaFeature::None ? FeatureName(at) : "",
+                         PlaceName(PlaceFor(actor)));
+        }
+    }
+
     std::optional<RE::NiPoint3> FormationController::FindRestActivity(ManagedFollower& f, RE::Actor& actor,
                                                                       RE::TESObjectREFR& anchor)
     {
@@ -2714,11 +3318,13 @@ namespace Wayfarer
             return std::nullopt;
         }
         const auto origin = actor.GetPosition();
-        auto center = anchor.GetPosition();
-        if (f.restAnchorZSet) {
-            center.z = f.restAnchorZ;
-        }
-        const float height = Settings::GetSingleton().Get().sandbox.activityHeight;
+        const auto center = RestCenter(f, anchor);
+        const auto& tuning = Settings::GetSingleton().Get().sandbox;
+        const float height = tuning.activityHeight;
+        const auto place = PlaceFor(actor);
+        const bool cold = TraitsFor(actor).cold;
+        f.pendingFeature = AreaFeature::None;
+        f.pendingFeatureRef = {};
         std::unordered_set<RE::FormID> occupied;
         std::vector<RE::NiPoint3> people;
         struct Opportunity
@@ -2726,6 +3332,7 @@ namespace Wayfarer
             RE::ObjectRefHandle handle;
             float score;
             bool patron;
+            AreaFeature feature;
         };
         std::vector<Opportunity> choices;
         auto claimed = [&](RE::FormID id) {
@@ -2734,8 +3341,7 @@ namespace Wayfarer
                 return entry.second.restRecovery.walking && ref && ref->GetFormID() == id;
             });
         };
-        const bool settledSocial =
-            SettledRest(ContextFor(actor)) && Settings::GetSingleton().Get().sandbox.social;
+        const bool settledSocial = SettledRest(ContextFor(actor)) && tuning.social;
         if (auto* lists = RE::ProcessLists::GetSingleton()) {
             Engine::ForEachHighActor(*lists, [&](RE::Actor& other) {
                 if (SocialSpace(other) != SocialSpace(actor) || !other.Is3DLoaded()) {
@@ -2762,7 +3368,10 @@ namespace Wayfarer
                 const float distance = std::hypot(Distance2D(origin, pos), pos.z - origin.z);
                 if (Length({velocity.x, velocity.y}) < 12 && distance > 280 &&
                     Distance2D(center, pos) < f.sandboxRadius - 180 && std::abs(pos.z - center.z) <= height) {
-                    choices.push_back({other.GetHandle(), distance + 250, true});
+                    choices.push_back({other.GetHandle(),
+                                       distance + 250 +
+                                           (RestSpotCrowded(actor.GetFormID(), pos, 260) ? 900.0F : 0.0F),
+                                       true, AreaFeature::None});
                 }
                 return RE::BSContainer::ForEachResult::kContinue;
             });
@@ -2780,15 +3389,34 @@ namespace Wayfarer
                 }
             }
         }
+        auto currentFeature = f.featureRef.get();
         for (auto* searchCell : cells) {
             Engine::ForEachReferenceInRange(
                 *searchCell, center, std::hypot(f.sandboxRadius, height), [&](RE::TESObjectREFR& ref) {
-                    if (ref.IsDisabled() || ref.IsDeleted() || ref.GetIgnoredBySandbox() ||
-                        occupied.contains(ref.GetFormID()) || claimed(ref.GetFormID())) {
+                    auto* base = ref.GetBaseObject();
+                    if (!base || ref.IsDisabled() || ref.IsDeleted()) {
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
-                    auto* base = ref.GetBaseObject();
-                    if (!base) {
+                    const auto pos = ref.GetPosition();
+                    const float distance = std::hypot(Distance2D(origin, pos), pos.z - origin.z);
+                    if (std::abs(pos.z - center.z) > height || Distance2D(center, pos) > f.sandboxRadius - 40) {
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
+                    // Fires, shrines and stones take several visitors, so they are not "claimed".
+                    if (const auto feature = tuning.areaActivities ? FeatureFor(*base) : AreaFeature::None;
+                        feature != AreaFeature::None) {
+                        if (distance >= 140 && currentFeature.get() != &ref &&
+                            FeatureUsers(actor.GetFormID(), ref.GetFormID()) < FeatureCapacity(feature)) {
+                            const float variation = static_cast<float>(
+                                RestPose::Mix(ref.GetFormID() + actor.GetFormID() + f.activitySearch.sequence) %
+                                200);
+                            choices.push_back({ref.GetHandle(), distance + variation + FeatureScore(feature, place, cold),
+                                               false, feature});
+                        }
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
+                    if (ref.GetIgnoredBySandbox() || occupied.contains(ref.GetFormID()) ||
+                        claimed(ref.GetFormID())) {
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
                     auto* furniture = base->As<RE::TESFurniture>();
@@ -2801,18 +3429,18 @@ namespace Wayfarer
                                                   RE::TESFurniture::ActiveMarker::kDisablesActivation,
                                                   RE::TESFurniture::ActiveMarker::kIsPerch) ||
                          furniture->workBenchData.benchType !=
-                             RE::TESFurniture::WorkBenchData::BenchType::kNone)) {
+                             RE::TESFurniture::WorkBenchData::BenchType::kNone ||
+                         UnsuitableRestFurniture(*furniture))) {
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
-                    const auto pos = ref.GetPosition();
-                    const float distance = std::hypot(Distance2D(origin, pos), pos.z - origin.z);
-                    if (distance < 160 || std::abs(pos.z - center.z) > height ||
-                        Distance2D(center, pos) > f.sandboxRadius - 40) {
+                    if (distance < 160) {
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
+                    // Vary the pick and steer away from spots another companion already has.
                     const float variation = static_cast<float>(
-                        RestPose::Mix(ref.GetFormID() + actor.GetFormID() + f.activitySearch.sequence) % 160);
-                    choices.push_back({ref.GetHandle(), distance + variation, false});
+                        RestPose::Mix(ref.GetFormID() + actor.GetFormID() + f.activitySearch.sequence) % 320);
+                    const float crowding = RestSpotCrowded(actor.GetFormID(), pos, 260) ? 900.0F : 0.0F;
+                    choices.push_back({ref.GetHandle(), distance + variation + crowding, false, AreaFeature::None});
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
         }
@@ -2820,15 +3448,27 @@ namespace Wayfarer
                   [](const auto& a, const auto& b) { return a.score < b.score; });
         const auto area = choices.empty() ? RestReachability{}
                                           : navigation.RestArea(origin, center, f.sandboxRadius, height);
-        for (std::size_t i = 0; i < std::min<std::size_t>(choices.size(), 8); ++i) {
+        static constexpr std::array<float, 3> beside{0.0F, .7F, -.7F};
+        static constexpr std::array<float, 5> around{0.0F, 1.0F, -1.0F, 2.0F, -2.0F}; // A ring round a fire.
+        for (std::size_t i = 0; i < std::min<std::size_t>(choices.size(), 12); ++i) {
             auto ref = choices[i].handle.get();
             if (!ref) {
                 continue;
             }
+            const auto feature = choices[i].feature;
             const auto pos = ref->GetPosition();
             const float angle = std::atan2(origin.y - pos.y, origin.x - pos.x);
-            const float standOff = choices[i].patron ? 175.0F : 95.0F;
-            for (float turn : {0.0F, .7F, -.7F}) {
+            float standOff = choices[i].patron ? 175.0F : 95.0F;
+            if (feature != AreaFeature::None) {
+                const auto low = ref->GetBoundMin(), high = ref->GetBoundMax();
+                const float extent =
+                    std::max({std::abs(low.x), std::abs(low.y), std::abs(high.x), std::abs(high.y)}) *
+                    ref->GetScale();
+                standOff = std::clamp(extent + (feature == AreaFeature::Fire ? 70.0F : 60.0F), 90.0F, 260.0F);
+            }
+            const std::span<const float> turns =
+                feature == AreaFeature::Fire ? std::span<const float>(around) : std::span<const float>(beside);
+            for (float turn : turns) {
                 const RE::NiPoint3 desired{pos.x + std::cos(angle + turn) * standOff,
                                            pos.y + std::sin(angle + turn) * standOff, pos.z};
                 const auto route = navigation.FindRestDestination(area, desired);
@@ -2849,23 +3489,191 @@ namespace Wayfarer
                 }
                 if (std::any_of(people.begin(), people.end(), [&](auto person) {
                         return std::abs(person.z - point.z) < 120 && Distance2D(person, point) < 100;
-                    })) {
+                    }) ||
+                    (feature != AreaFeature::None && RestSpotCrowded(actor.GetFormID(), point, 90))) {
                     continue;
                 }
                 f.activityTarget = ref->GetHandle();
                 f.activityWalkTime = RestWalkBudget(route->routeLength);
+                if (feature != AreaFeature::None) {
+                    f.pendingFeature = feature;
+                    f.pendingFeatureRef = ref->GetHandle();
+                    f.pendingFeaturePoint = pos;
+                }
                 logger::info("[RestActivity] {} approaching {} {:08X}; distance={:.0f} range={:.0f} "
-                             "heightDelta={:.0f} route={:.0f} timeout={:.0f}",
-                             actor.GetName(), choices[i].patron ? "patron" : "marker", ref->GetFormID(),
-                             Distance2D(origin, point), f.sandboxRadius, point.z - origin.z,
-                             route->routeLength, f.activityWalkTime);
+                             "heightDelta={:.0f} route={:.0f} timeout={:.0f} place={}",
+                             actor.GetName(),
+                             choices[i].patron             ? "patron"
+                             : feature != AreaFeature::None ? FeatureName(feature)
+                                                            : "marker",
+                             ref->GetFormID(), Distance2D(origin, point), f.sandboxRadius, point.z - origin.z,
+                             route->routeLength, f.activityWalkTime, PlaceName(place));
                 return point;
             }
         }
         logger::info("[RestActivity] {} no reachable unoccupied activity destination; candidates={} "
-                     "reachable={} limited={}",
-                     actor.GetName(), choices.size(), area.distance.size(), area.limited);
+                     "reachable={} limited={} place={}",
+                     actor.GetName(), choices.size(), area.distance.size(), area.limited, PlaceName(place));
         return std::nullopt;
+    }
+
+    bool FormationController::RestSpotCrowded(RE::FormID self, RE::NiPoint3 point, float clearance) const
+    {
+        for (const auto& [id, other] : managed) {
+            if (id == self) {
+                continue;
+            }
+            if (auto companion = other.handle.get();
+                companion && Distance2D(companion->GetPosition(), point) < clearance) {
+                return true;
+            }
+            if (other.restRecovery.walking && other.slot >= 0 &&
+                static_cast<std::size_t>(other.slot) < gatherPool.size()) {
+                if (auto destination = gatherPool[static_cast<std::size_t>(other.slot)].get();
+                    destination && Distance2D(destination->GetPosition(), point) < clearance) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    std::optional<RE::NiPoint3> FormationController::FindRestSpot(ManagedFollower& f, RE::Actor& actor,
+                                                                  RE::TESObjectREFR& anchor, float distance)
+    {
+        auto* cell = actor.GetParentCell();
+        if (!cell) {
+            return std::nullopt;
+        }
+        const auto origin = actor.GetPosition();
+        const auto center = RestCenter(f, anchor);
+        const auto& tuning = Settings::GetSingleton().Get().sandbox;
+        const float height = tuning.activityHeight;
+        const auto place = PlaceFor(actor);
+        // Outdoors, the water's edge and high ground are worth a longer walk.
+        const bool outdoors = tuning.areaActivities && OutdoorPlace(place) && !cell->IsInteriorCell();
+        const float outer = std::min(distance * 1.35F, f.sandboxRadius - 40);
+        const float inner = std::min(distance * .6F, outer * .5F);
+        const auto area = navigation.RestArea(origin, center, f.sandboxRadius, height);
+        const auto spots = navigation.RestSpots(area, center, outdoors ? std::min(inner, 250.0F) : inner,
+                                                outdoors ? f.sandboxRadius - 40 : outer);
+        auto* tes = RE::TES::GetSingleton();
+        auto waterAt = [&](RE::NiPoint3 p) -> std::optional<float> {
+            auto* at = !cell->IsInteriorCell() && tes ? tes->GetCell(p) : cell;
+            float water{};
+            if (at && at->GetWaterHeight(p, water) && water > -100000.0F) {
+                return water;
+            }
+            return std::nullopt;
+        };
+        // Each companion leans toward its own bearing from the anchor so the party fans out.
+        const float bearing =
+            static_cast<float>(RestPose::Mix(actor.GetFormID() + f.restRecovery.sequence * 7919) % 6283) * .001F;
+        struct Ranked
+        {
+            float score;
+            RestDestination spot;
+            AreaFeature feature;
+        };
+        std::vector<Ranked> ranked;
+        for (const auto& spot : spots) {
+            const RE::NiPoint3 point{spot.point.x, spot.point.y, spot.point.z};
+            if (std::abs(point.z - center.z) > height || Distance2D(origin, point) < 140) {
+                continue;
+            }
+            auto kind = AreaFeature::None;
+            float bonus = 0;
+            if (outdoors) {
+                if (const auto water = waterAt(point)) {
+                    const float above = point.z - *water;
+                    if (above < 2) {
+                        continue;
+                    }
+                    if (above <= 40) {
+                        kind = AreaFeature::Water;
+                        bonus = -650;
+                    }
+                }
+                if (const float rise = point.z - center.z; kind == AreaFeature::None &&
+                                                          place == RestPlace::Wild && rise >= 180) {
+                    kind = AreaFeature::Vista;
+                    bonus = -std::min(rise, 500.0F) * 1.2F;
+                }
+            }
+            const float reach = Distance2D(center, point);
+            if (kind == AreaFeature::None && (reach < inner || reach > outer)) {
+                continue;
+            }
+            const auto away = Normalize({point.x - center.x, point.y - center.y});
+            const float alignment = away.x * std::cos(bearing) + away.y * std::sin(bearing);
+            const auto hash =
+                RestPose::Mix(static_cast<std::uint32_t>(static_cast<std::int32_t>(point.x)) * 73856093U ^
+                              static_cast<std::uint32_t>(static_cast<std::int32_t>(point.y)) * 19349663U ^
+                              actor.GetFormID());
+            const float score = (kind == AreaFeature::None ? std::abs(reach - distance) : 0.0F) +
+                                (1 - alignment) * 300 + static_cast<float>(hash % 200) + spot.routeLength * .15F +
+                                (RestSpotCrowded(actor.GetFormID(), point, 260) ? 1500.0F : 0.0F) + bonus;
+            ranked.push_back({score, spot, kind});
+        }
+        std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.score < b.score; });
+        for (std::size_t i = 0; i < std::min<std::size_t>(ranked.size(), 12); ++i) {
+            const auto& spot = ranked[i].spot;
+            const RE::NiPoint3 point{spot.point.x, spot.point.y, spot.point.z};
+            float water{};
+            if ((cell->GetWaterHeight(point, water) && water >= point.z - 2) ||
+                RestSpotCrowded(actor.GetFormID(), point, 220)) {
+                continue;
+            }
+            f.activityWalkTime = RestWalkBudget(spot.routeLength);
+            const auto kind = ranked[i].feature;
+            if (kind != AreaFeature::None) {
+                // Face away from the land: at the shore that is the water, on a rise the view.
+                Vec2 landward{};
+                for (const auto& other : spots) {
+                    const Vec2 offset{other.point.x - point.x, other.point.y - point.y};
+                    const float length = Length(offset);
+                    if (length < 40 || length > 320) {
+                        continue;
+                    }
+                    const RE::NiPoint3 at{other.point.x, other.point.y, other.point.z};
+                    const auto level = kind == AreaFeature::Water ? waterAt(at) : std::nullopt;
+                    if (kind == AreaFeature::Water && level && other.point.z - *level <= 40) {
+                        continue; // Shoreline too, not land behind.
+                    }
+                    if (kind == AreaFeature::Vista && other.point.z > point.z - 40) {
+                        continue; // Only the slope climbed, not the summit.
+                    }
+                    landward = {landward.x + offset.x / length, landward.y + offset.y / length};
+                }
+                auto outward = Length(landward) > .5F ? Normalize({-landward.x, -landward.y})
+                                                      : Normalize({point.x - center.x, point.y - center.y});
+                f.pendingFeature = kind;
+                f.pendingFeatureRef = {};
+                f.pendingFeaturePoint = {point.x + outward.x * 400, point.y + outward.y * 400, point.z};
+            }
+            logger::info("[RestActivity] {} heading for {}; distance={:.0f} anchorDistance={:.0f} "
+                         "range={:.0f} route={:.0f} place={}",
+                         actor.GetName(),
+                         kind == AreaFeature::Water   ? "the water's edge"
+                         : kind == AreaFeature::Vista ? "high ground"
+                                                      : "a quiet spot",
+                         Distance2D(origin, point), Distance2D(center, point), f.sandboxRadius, spot.routeLength,
+                         PlaceName(place));
+            return point;
+        }
+        logger::info("[RestActivity] {} found no open ground to spread out; spots={} reachable={} limited={}",
+                     actor.GetName(), spots.size(), area.distance.size(), area.limited);
+        return std::nullopt;
+    }
+
+    void FormationController::BeginRestWalk(ManagedFollower& f, float budget)
+    {
+        if (auto* stroll = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESPackage>(
+                0x870 + f.slot, Settings::GetSingleton().Get().pluginName)) {
+            stroll->packData.packFlags.set(RE::PACKAGE_DATA::GeneralFlag::kPreferredSpeed);
+            stroll->packData.maxSpeed = RE::PACKAGE_DATA::PreferredSpeed::kWalk;
+        }
+        f.restRecovery.Begin(budget);
     }
 
     void FormationController::UpdateRestRecovery(ManagedFollower& f, RE::Actor& actor,
@@ -2880,13 +3688,22 @@ namespace Wayfarer
         const bool busy = !state || state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal ||
                           actor.GetOccupiedFurniture().get() || actor.GetCurrentScene() ||
                           actor.IsInCombat() || f.restPose.kind || lookout.actor == actor.GetFormID() ||
-                          social.Listener(actor.GetFormID()) || f.patronTimer > 0 || animationDriven ||
+                          social.Holds(actor.GetFormID()) || f.patronTimer > 0 || animationDriven ||
                           IsSpeaking(actor);
         const auto& settings = Settings::GetSingleton().Get();
         auto* data = RE::TESDataHandler::GetSingleton();
         auto* native = data->LookupForm<RE::TESPackage>(SandboxPackageLocal(f.slot), settings.pluginName);
         auto* stroll = data->LookupForm<RE::TESPackage>(0x870 + f.slot, settings.pluginName);
         if (recovery.walking) {
+            if (f.socialWalk) {
+                // UpdateSocial ends this walk on arrival; only a stall or interruption ends it here.
+                if (recovery.Done(dt, false, busy || !gatherPool[f.slot].get())) {
+                    logger::info("[Social] {} did not reach their conversation partner; elapsed={:.1f}",
+                                 actor.GetName(), recovery.elapsed);
+                    EndSocialWalk(f, true);
+                }
+                return;
+            }
             auto target = gatherPool[f.slot].get();
             const auto actorPos = actor.GetPosition();
             const auto targetPos = target ? target->GetPosition() : RE::NiPoint3{};
@@ -2894,20 +3711,57 @@ namespace Wayfarer
                                                        {targetPos.x, targetPos.y, targetPos.z});
             if (recovery.Done(dt, arrived,
                               busy || !target ||
-                                  (!f.activityTarget.get() && settings.sandbox.idleRecoveryAfter <= 0))) {
-
-                if (arrived && !busy && f.activityTarget.get()) {
-                    auto position = anchor.GetPosition();
-                    if (std::abs(position.z - actorPos.z) >= 64) {
-                        position.z = actorPos.z;
-                        anchor.SetPosition(position);
-                    }
+                                  (!f.activityTarget.get() && !recovery.dispersal &&
+                                   settings.sandbox.idleRecoveryAfter <= 0))) {
+                // Rest where they went. Native sandbox otherwise walks straight back to the
+                // stopping point: the marker becomes the centre, with a small radius. A seat
+                // taken just short of the destination counts.
+                const bool closeBy = target && Distance2D(actorPos, targetPos) < 250;
+                const bool atFeature = arrived && f.pendingFeature != AreaFeature::None;
+                if (arrived || closeBy) {
+                    FocusRest(f, actor, anchor,
+                              f.activityTarget.get() && f.pendingFeature == AreaFeature::None ? 200.0F : 320.0F);
                 }
-                logger::info("[RestRecovery] {} returning to native sandbox; elapsed={:.1f}", actor.GetName(),
-                             recovery.elapsed);
+                if (!arrived) {
+                    f.pendingFeature = AreaFeature::None;
+                }
+                if (arrived && (atFeature || !f.activityTarget.get())) {
+                    // At a fire, shrine or open spot: settle into a pose soon after arriving.
+                    f.restPose.Init(actor.GetFormID());
+                    f.restPose.cooldown = std::min(
+                        f.restPose.cooldown,
+                        atFeature ? .5F
+                                  : 2.0F + static_cast<float>(RestPose::Mix(actor.GetFormID() + recovery.sequence) % 4));
+                }
+                logger::info("[RestRecovery] {} returning to native sandbox; elapsed={:.1f} {}", actor.GetName(),
+                             recovery.elapsed,
+                             arrived || closeBy ? fmt::format("settling here (radius {:.0f})", f.focusRadius)
+                                             : std::string("interrupted"));
                 recovery.Finish();
                 f.activityTarget = {};
             }
+            return;
+        }
+        // Dispersal: go somewhere to relax as soon as rest begins or widens. Unlike the
+        // quiet-time searches below, companions may set off together.
+        if (f.activitySearch.Primed(dt, stroll && !busy && actor.GetCurrentPackage() == native)) {
+            if (activityDispatchCooldown > 0) {
+                return;
+            }
+            f.activitySearch.Attempt(actor.GetFormID());
+            activityDispatchCooldown = .35F;
+            auto point = FindRestActivity(f, actor, anchor);
+            if (!point) {
+                f.activityTarget = {};
+                point = FindRestSpot(f, actor, anchor, std::clamp(f.sandboxRadius * .45F, 250.0F, 900.0F));
+            }
+            if (point && PrepareAuxMarker(f, actor, *point, true)) {
+                BeginRestWalk(f, f.activityWalkTime);
+                recovery.dispersal = true;
+                return;
+            }
+            f.activityTarget = {};
+            f.pendingFeature = AreaFeature::None;
             return;
         }
         const bool standing =
@@ -2932,14 +3786,19 @@ namespace Wayfarer
         if (activityReady && activityDispatchCooldown <= 0) {
             f.activitySearch.Attempt(actor.GetFormID());
             activityDispatchCooldown = 2.5F;
-            if (auto point = FindRestActivity(f, actor, anchor)) {
+            auto point = FindRestActivity(f, actor, anchor);
+            if (!point && settings.sandbox.areaActivities && OutdoorPlace(PlaceFor(actor))) {
+                // Outdoors there is usually open water or high ground to wander to next.
+                f.activityTarget = {};
+                point = FindRestSpot(f, actor, anchor, std::clamp(f.sandboxRadius * .45F, 250.0F, 900.0F));
+            }
+            if (point) {
                 if (PrepareAuxMarker(f, actor, *point, true)) {
-                    stroll->packData.packFlags.set(RE::PACKAGE_DATA::GeneralFlag::kPreferredSpeed);
-                    stroll->packData.maxSpeed = RE::PACKAGE_DATA::PreferredSpeed::kWalk;
-                    recovery.Begin(f.activityWalkTime);
+                    BeginRestWalk(f, f.activityWalkTime);
                     return;
                 }
                 f.activityTarget = {};
+                f.pendingFeature = AreaFeature::None;
             }
 
             actor.EvaluatePackage(false, true);
@@ -2947,8 +3806,8 @@ namespace Wayfarer
         if (!recoveryReady) {
             return;
         }
-        const auto origin = actor.GetPosition(), center = anchor.GetPosition();
-        const float radius = std::min(360.0F, f.sandboxRadius * .65F);
+        const auto origin = actor.GetPosition(), center = RestCenter(f, anchor);
+        const float radius = std::min(600.0F, f.sandboxRadius * .5F);
         for (int attempt = 0; attempt < 8; ++attempt) {
             const auto roll = RestPose::Mix(actor.GetFormID() + recovery.sequence * 7919 + attempt * 3571);
             const float angle = static_cast<float>(roll % 6283) * .001F;
@@ -2964,26 +3823,13 @@ namespace Wayfarer
             if (actor.GetParentCell()->GetWaterHeight(*point, water) && water >= point->z - 2) {
                 continue;
             }
-            bool clear = true;
-            for (const auto& [id, other] : managed) {
-                if (id != actor.GetFormID()) {
-                    if (auto companion = other.handle.get();
-                        companion && Distance2D(companion->GetPosition(), *point) < 120) {
-                        clear = false;
-                        break;
-                    }
-                }
-            }
-            if (!clear) {
+            if (RestSpotCrowded(actor.GetFormID(), *point, 120)) {
                 continue;
             }
-            auto* marker = PrepareAuxMarker(f, actor, *point, true);
-            if (!marker) {
+            if (!PrepareAuxMarker(f, actor, *point, true)) {
                 break;
             }
-            stroll->packData.packFlags.set(RE::PACKAGE_DATA::GeneralFlag::kPreferredSpeed);
-            stroll->packData.maxSpeed = RE::PACKAGE_DATA::PreferredSpeed::kWalk;
-            recovery.Begin();
+            BeginRestWalk(f);
             logger::info("[RestRecovery] {} taking a short walk; distance={:.0f} anchorDistance={:.0f}",
                          actor.GetName(), Distance2D(origin, *point), Distance2D(center, *point));
             return;
@@ -3041,6 +3887,14 @@ namespace Wayfarer
             marker->MoveTo(&actor);
             marker->SetPosition(actor.GetPosition());
             f.anchorSet = true;
+            f.restHome = actor.GetPosition();
+            f.restHomeSet = true;
+            f.focused = false;
+            f.feature = f.pendingFeature = AreaFeature::None;
+        }
+        if (!f.restHomeSet) {
+            f.restHome = marker->GetPosition(); // A Relax order restored from a save.
+            f.restHomeSet = true;
         }
         if (!f.restAnchorZSet) {
             f.restAnchorZ = marker->GetPosition().z;
@@ -3054,8 +3908,13 @@ namespace Wayfarer
                          actor.GetName(), f.sandboxRadius, activityRadius, static_cast<int>(context),
                          sandbox.expanded ? "free roam" : "nearby");
         }
+        // Head straight for somewhere to relax when rest begins or its area widens,
+        // rather than loitering at the stopping point. Staggered so they spread out.
+        if (activityRadius > f.sandboxRadius + 1) {
+            f.activitySearch.Prime(.3F + .6F * static_cast<float>(f.slot) +
+                                   static_cast<float>(RestPose::Mix(actor.GetFormID()) % 5) * .1F);
+        }
 
-        location->rad = static_cast<std::uint32_t>(activityRadius);
         f.distantCatchup = false;
         package->packData.packFlags.set(RE::PACKAGE_DATA::GeneralFlag::kPreferredSpeed);
         package->packData.maxSpeed = RE::PACKAGE_DATA::PreferredSpeed::kWalk;
@@ -3077,11 +3936,16 @@ namespace Wayfarer
         const bool previouslyWalking = f.restRecovery.walking;
         UpdateRestRecovery(f, actor, *marker, dt);
         UpdateRestPose(f, actor, dt);
+        // After a walk the marker sits where they went, with a small radius; otherwise the
+        // whole area. Set after the updates above so an arrival applies this same tick.
+        location->rad = static_cast<std::uint32_t>(f.focused ? std::min(f.focusRadius, activityRadius)
+                                                             : activityRadius);
         if (lookout.actor == actor.GetFormID()) {
             SetPoseFlag(f.slot, 1);
         }
 
-        f.socialHold = social.Listener(actor.GetFormID()) != 0;
+        const bool previousHold = f.socialHold;
+        f.socialHold = social.Holds(actor.GetFormID());
         f.socialPhase = f.restRecovery.walking ? 2 : f.socialHold ? 1 : 0;
         SetSocialFlag(f.slot, f.socialPhase);
         auto* activePackage = package;
@@ -3123,7 +3987,7 @@ namespace Wayfarer
         if (alias && alias->GetReference() == &actor && !IsSpeaking(actor) && !actor.GetCurrentScene() &&
             (!nativeBusy || ownPoseTransition) &&
             (entering || previousPose != f.restPose.kind || previouslyWalking != f.restRecovery.walking ||
-             moved || (!owns && f.sandboxRefresh >= 1.0F))) {
+             previousHold != f.socialHold || moved || (!owns && f.sandboxRefresh >= 1.0F))) {
             actor.EvaluatePackage(false, true);
             f.sandboxRefresh = 0;
         }
@@ -3165,7 +4029,7 @@ namespace Wayfarer
             if (HandHolding::OwnsMovement(id)) {
                 return nullptr;
             }
-            if (!sandbox.active &&
+            if (!sandbox.active && !follower.scout.Active() &&
                 !HandHolding::TravelRequested(intent.CanTravel(), mode == FormationMode::kCompanion,
                                               Settings::GetSingleton().Get().handHolding, id,
                                               HandHolding::GetApproach().actor)) {
@@ -3299,6 +4163,7 @@ namespace Wayfarer
 
     void FormationController::ReleaseTravel(ManagedFollower& f, RE::Actor* actor, bool tetherHandoff)
     {
+        EndLootScout(f, actor, Loot::End::Released);
         SetHandApproachRadius(f, false);
         f.avoidance.Reset();
         if (actor && !tetherHandoff) {
@@ -3314,7 +4179,7 @@ namespace Wayfarer
         f.awarenessTime = 0;
 
         f.travelActive = false;
-        f.socialHold = false;
+        f.socialHold = f.socialWalk = false;
         f.socialPhase = 0;
         f.patron = {};
         f.patronGesture = false;
@@ -3322,15 +4187,14 @@ namespace Wayfarer
         f.sandboxActive = f.distantCatchup = false;
         f.sandboxRadius = f.sandboxRefresh = 0;
         if (!IsRelaxing()) {
-            f.anchorSet = false;
-            f.restAnchorZSet = false;
+            ClearRestAnchor(f);
         }
         TravelSpeed::Clear(static_cast<std::uint32_t>(f.slot));
         f.speedScale = 1.0F;
         f.goal.Release();
     }
 
-    void FormationController::ReleaseAll()
+    void FormationController::ReleaseAll(bool keepLootScouts)
     {
         HandHolding::Reset();
         RestoreTravelBanter();
@@ -3345,7 +4209,9 @@ namespace Wayfarer
         }
         for (auto& [formID, follower] : managed) {
             static_cast<void>(formID);
-            follower.catchup.distantTime = 0;
+            if (keepLootScouts && follower.scout.Active()) {
+                continue;
+            }
             auto actorPointer = follower.handle.get();
             ReleaseTravel(follower, actorPointer.get());
         }
@@ -3374,19 +4240,24 @@ namespace Wayfarer
             return false;
         }
         auto it = managed.find(actor.GetFormID());
+        // A companion walking over to talk stays part of the pair while under way.
+        const bool walkingOver = it != managed.end() && it->second.socialWalk &&
+                                 it->second.restRecovery.walking && social.Walker() == actor.GetFormID();
         if (it == managed.end() || !it->second.sandboxActive || it->second.restPose.kind ||
-            it->second.restRecovery.walking || lookout.actor == actor.GetFormID()) {
+            (it->second.restRecovery.walking && !walkingOver) || lookout.actor == actor.GetFormID()) {
             return false;
         }
-        auto* package = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESPackage>(
-            SandboxPackageLocal(it->second.slot), Settings::GetSingleton().Get().pluginName);
-        auto* conversation = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESPackage>(
-            SocialPackageLocal(it->second.slot), Settings::GetSingleton().Get().pluginName);
-        if (actor.GetCurrentPackage() != package &&
-            !(social.Listener(actor.GetFormID()) && actor.GetCurrentPackage() == conversation)) {
+        auto* data = RE::TESDataHandler::GetSingleton();
+        const auto& plugin = Settings::GetSingleton().Get().pluginName;
+        auto* package = data->LookupForm<RE::TESPackage>(SandboxPackageLocal(it->second.slot), plugin);
+        auto* conversation = data->LookupForm<RE::TESPackage>(SocialPackageLocal(it->second.slot), plugin);
+        auto* stroll = data->LookupForm<RE::TESPackage>(0x870 + it->second.slot, plugin);
+        auto* current = actor.GetCurrentPackage();
+        if (current != package && !(social.Holds(actor.GetFormID()) && current == conversation) &&
+            !(walkingOver && current == stroll)) {
             return false;
         }
-        if (!social.Listener(actor.GetFormID()) && IsSpeaking(actor)) {
+        if (!social.Involves(actor.GetFormID()) && IsSpeaking(actor)) {
             return false;
         }
         auto* race = actor.GetRace();
@@ -3396,7 +4267,7 @@ namespace Wayfarer
         }
         RE::NiPoint3 velocity{};
         actor.GetLinearVelocity(velocity);
-        return Length({velocity.x, velocity.y}) < 140;
+        return walkingOver || Length({velocity.x, velocity.y}) < 140;
     }
 
     RE::TESIdleForm* FormationController::ConsumeRestIdle(std::uint32_t slot)
@@ -3410,6 +4281,18 @@ namespace Wayfarer
             return nullptr;
         }
         auto& f = managed.at(actor->GetFormID());
+        if (f.tableIdle) {
+            // A drink or meal at the inn table, played in the chair.
+            auto chair = f.tableSeat.get();
+            if (!chair) {
+                f.tableIdle = 0;
+            }
+            else if (SeatedIn(*actor, chair.get()) && !IsSpeaking(*actor)) {
+                f.tableIdleActive = true;
+                return RE::TESForm::LookupByID<RE::TESIdleForm>(std::exchange(f.tableIdle, 0));
+            }
+            return nullptr;
+        }
         auto* package = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESPackage>(
             PosePackageLocal(slot), Settings::GetSingleton().Get().pluginName);
         if (f.restPose.kind != 1 || f.restPose.started || f.restIdleRequested ||
@@ -3431,6 +4314,14 @@ namespace Wayfarer
             return;
         }
         auto& f = it->second;
+        if (idle->GetFormID() == CHAIR_DRINK_IDLE || idle->GetFormID() == CHAIR_EAT_IDLE) {
+            logger::info("[Tavern] {} {} at the table accepted={}", actor->GetName(),
+                         idle->GetFormID() == CHAIR_DRINK_IDLE ? "drinks" : "eats", accepted);
+            if (!accepted) {
+                f.tableIdleActive = false;
+            }
+            return;
+        }
         if (f.slot != static_cast<int>(slot) || f.restPose.kind != 1 || !f.restIdleRequested ||
             RestIdleID(f.activity) != idle->GetFormID()) {
             return;
@@ -3469,7 +4360,7 @@ namespace Wayfarer
     {
         f.patronCooldown -= dt;
         const bool eligible =
-            SocialEligible(actor) && !social.Listener(actor.GetFormID()) && SettledRest(ContextFor(actor));
+            SocialEligible(actor) && !social.Involves(actor.GetFormID()) && SettledRest(ContextFor(actor));
         if (!eligible) {
             f.patron = {};
             f.patronTimer = 0;
@@ -3524,17 +4415,510 @@ namespace Wayfarer
         }
     }
 
+    RE::TESObjectREFR* FormationController::FreeTableChair(RE::Actor& actor, RE::NiPoint3 center) const
+    {
+        auto* cell = actor.GetParentCell();
+        if (!cell) {
+            return nullptr;
+        }
+        // Seats in use: whoever sits there, plus companions already on their way to one.
+        std::unordered_map<RE::FormID, int> used;
+        if (auto* lists = RE::ProcessLists::GetSingleton()) {
+            Engine::ForEachHighActor(*lists, [&](RE::Actor& other) {
+                if (auto chair = other.GetOccupiedFurniture().get()) {
+                    ++used[chair->GetFormID()];
+                }
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+        }
+        for (const auto& [id, other] : managed) {
+            auto chair = other.tableSeat.get();
+            auto companion = other.handle.get();
+            if (chair && companion && companion->GetOccupiedFurniture().get() != chair) {
+                ++used[chair->GetFormID()];
+            }
+        }
+        RE::TESObjectREFR* best = nullptr;
+        float nearest = 280;
+        Engine::ForEachReferenceInRange(*cell, center, 300, [&](RE::TESObjectREFR& ref) {
+            if (ref.IsDisabled() || ref.IsDeleted() || !SitFurniture(ref)) {
+                return RE::BSContainer::ForEachResult::kContinue;
+            }
+            if (auto found = used.find(ref.GetFormID()); found != used.end() && found->second >= SeatCount(ref)) {
+                return RE::BSContainer::ForEachResult::kContinue;
+            }
+            const auto pos = ref.GetPosition();
+            if (const float distance = Distance2D(pos, center); std::abs(pos.z - center.z) < 100 && distance < nearest) {
+                nearest = distance;
+                best = &ref;
+            }
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+        return best;
+    }
+
+    void FormationController::StartTableDrink(ManagedFollower& f, RE::Actor& actor, bool meal)
+    {
+        if (!f.tableSeat.get() || f.tableIdleActive) {
+            return;
+        }
+        f.tableIdle = meal ? CHAIR_EAT_IDLE : CHAIR_DRINK_IDLE;
+        f.tableIdleTime = 18.0F + static_cast<float>(RestPose::Mix(actor.GetFormID() + table.beats.sequence) % 13);
+    }
+
+    bool FormationController::CallTableWorker(const std::vector<RE::FormID>& seated)
+    {
+        auto* server = RE::TESForm::LookupByID<RE::TESFaction>(0xDEE93); // JobInnServer
+        auto* lists = RE::ProcessLists::GetSingleton();
+        if (!server || !lists || seated.empty()) {
+            return false;
+        }
+        const auto callerID = seated[RestPose::Mix(table.beats.sequence * 13) % seated.size()];
+        const auto found = managed.find(callerID);
+        if (found == managed.end()) {
+            return false;
+        }
+        auto caller = found->second.handle.get();
+        auto chair = found->second.tableSeat.get();
+        if (!caller || !chair) {
+            return false;
+        }
+        // Servers only: an innkeeper belongs behind the bar.
+        RE::Actor* worker = nullptr;
+        float nearest = 3000;
+        Engine::ForEachHighActor(*lists, [&](RE::Actor& other) {
+            auto* state = other.AsActorState();
+            if (other.IsPlayerRef() || managed.contains(other.GetFormID()) || !other.Is3DLoaded() || other.IsDead() ||
+                other.IsInCombat() || other.GetCurrentScene() || IsSpeaking(other) || !state ||
+                state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal || other.GetOccupiedFurniture().get() ||
+                SocialSpace(other) != table.space || Engine::FactionRank(other, server) < 0) {
+                return RE::BSContainer::ForEachResult::kContinue;
+            }
+            if (const float distance = Distance2D(other.GetPosition(), chair->GetPosition()); distance < nearest) {
+                nearest = distance;
+                worker = &other;
+            }
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+        if (!worker) {
+            return false;
+        }
+        // Open floor beside the caller's chair, on the server's side.
+        const auto seat = chair->GetPosition();
+        const auto from = worker->GetPosition();
+        const float toward = std::atan2(from.y - seat.y, from.x - seat.x);
+        std::optional<RE::NiPoint3> spot;
+        for (float turn : {0.0F, .6F, -.6F, 1.2F, -1.2F, 1.8F, -1.8F}) {
+            const RE::NiPoint3 desired{seat.x + std::cos(toward + turn) * 110, seat.y + std::sin(toward + turn) * 110,
+                                       seat.z};
+            const auto point = navigation.RestPoint(desired);
+            if (!point || std::abs(point->z - seat.z) > 64) {
+                continue;
+            }
+            bool clear = true;
+            Engine::ForEachHighActor(*lists, [&](RE::Actor& other) {
+                const auto p = other.GetPosition();
+                if (std::abs(p.z - point->z) < 100 && Distance2D(p, *point) < 55) {
+                    clear = false;
+                }
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+            if (clear) {
+                spot = point;
+                break;
+            }
+        }
+        if (!spot) {
+            return false;
+        }
+        auto* mark = PrepareAuxMarker(found->second, *caller, *spot, true);
+        if (!mark || !CallActorMethod(*worker, "PathToReference", static_cast<RE::TESObjectREFR*>(mark), 1.0F)) {
+            return false;
+        }
+        table.worker = worker->GetHandle();
+        table.workerMark = mark->GetHandle();
+        table.caller = callerID;
+        table.workerTime = 0;
+        found->second.tableLook = worker->GetFormID();
+        found->second.tableLookTime = 40;
+        logger::info("[Tavern] {} calls {} over for drinks; distance={:.0f}", caller->GetName(), worker->GetName(),
+                     nearest);
+        return true;
+    }
+
+    void FormationController::DissolveTable(const char* reason)
+    {
+        for (auto& [id, f] : managed) {
+            if (!f.tableSeat.get() && !f.tableLook) {
+                continue;
+            }
+            auto actor = f.handle.get();
+            if (f.restPose.kind == 2 && f.activity == RestActivity::TableSeat) {
+                EndRestPose(f, actor.get());
+                if (actor && !actor->GetCurrentScene() && !IsSpeaking(*actor)) {
+                    actor->EvaluatePackage(false, true);
+                }
+            }
+            f.tableSeat = {};
+            f.tableIdle = 0;
+            f.tableIdleActive = false;
+            f.tableLook = 0;
+        }
+        if (table.host) {
+            logger::info("[Tavern] the table breaks up: {}", reason);
+        }
+        table.Reset();
+    }
+
+    void FormationController::UpdateTavernTable(RE::PlayerCharacter& player, float dt)
+    {
+        const auto& tuning = Settings::GetSingleton().Get().sandbox;
+        if (!sandbox.active || !tuning.areaActivities || PlaceFor(player) != RestPlace::Tavern) {
+            if (table.host) {
+                DissolveTable("left the inn or stopped resting");
+            }
+            return;
+        }
+        // Census: whoever sits near the table is at it, however they got to the chair.
+        std::vector<RE::FormID> seated;
+        bool joining = false;
+        for (auto& [id, f] : managed) {
+            auto actor = f.handle.get();
+            if (!actor || !actor->Is3DLoaded() || !f.sandboxActive) {
+                continue;
+            }
+            auto chair = actor->GetOccupiedFurniture().get();
+            const bool sitting = chair && SeatedIn(*actor, chair.get()) && SitFurniture(*chair);
+            if (!table.host && sitting && !social.Involves(id)) {
+                table.host = id;
+                table.center = chair->GetPosition();
+                table.space = SocialSpace(*actor);
+                table.beats.Reset();
+                table.emptyTime = 0;
+                logger::info("[Tavern] {} sits down at a table; the others will join", actor->GetName());
+            }
+            if (!table.host) {
+                continue;
+            }
+            const bool atTable = sitting && SocialSpace(*actor) == table.space &&
+                                 Distance2D(chair->GetPosition(), table.center) < 300 &&
+                                 std::abs(chair->GetPosition().z - table.center.z) < 120;
+            const bool walkingToChair = f.restPose.kind == 2 && f.activity == RestActivity::TableSeat;
+            if (atTable) {
+                f.tableSeat = chair->GetHandle();
+                seated.push_back(id);
+            }
+            else if (walkingToChair) {
+                joining = true;
+            }
+            else if (f.tableSeat.get()) {
+                f.tableSeat = {}; // Got up.
+                f.tableIdle = 0;
+                f.tableIdleActive = false;
+                f.tableLook = 0;
+            }
+        }
+        if (!table.host) {
+            return;
+        }
+        table.emptyTime = seated.empty() ? table.emptyTime + dt : 0;
+        if (table.emptyTime > (joining ? 40.0F : 8.0F)) {
+            DissolveTable("everyone got up");
+            return;
+        }
+        if (seated.empty()) {
+            return;
+        }
+        // Everyone else in the inn comes over and takes the nearest open seat, including
+        // those already sitting at another table, strolling, or in the middle of a pose.
+        // Only a conversation in progress, or having just left this table, keeps them away.
+        auto* host = RE::TESForm::LookupByID<RE::Actor>(seated.front());
+        for (auto& [id, f] : managed) {
+            f.tableRest = std::max(0.0F, f.tableRest - dt);
+            auto actor = f.handle.get();
+            auto* state = actor ? actor->AsActorState() : nullptr;
+            if (!actor || !state || f.tableSeat.get() || f.tableRest > 0 || !f.sandboxActive || f.socialWalk ||
+                social.Involves(id) || lookout.actor == id || f.scout.Active() || !actor->Is3DLoaded() ||
+                SocialSpace(*actor) != table.space || IsSpeaking(*actor) || actor->GetCurrentScene() ||
+                state->IsWeaponDrawn() || (f.restPose.kind == 1 && f.activity == RestActivity::Applaud)) {
+                continue;
+            }
+            auto* chair = FreeTableChair(*actor, table.center);
+            if (!chair) {
+                break; // The table is full.
+            }
+            auto elsewhere = actor->GetOccupiedFurniture().get();
+            if (f.restPose.kind) {
+                EndRestPose(f, actor.get());
+            }
+            if (f.restRecovery.walking) {
+                f.restRecovery.Finish();
+                f.activityTarget = {};
+                f.pendingFeature = AreaFeature::None;
+            }
+            f.poseTurn = false;
+            f.tableSeat = chair->GetHandle();
+            f.activity = RestActivity::TableSeat;
+            BeginRestPose(f, *actor, 2, AreaFeature::None);
+            f.restPose.prepareLimit = 45; // Getting up from another seat and crossing the room.
+            actor->EvaluatePackage(false, true);
+            logger::info("[Tavern] {} joins {} at the table{}; seat {:08X} distance={:.0f}", actor->GetName(),
+                         host ? host->GetName() : "the party", elsewhere ? ", leaving another seat" : "",
+                         chair->GetFormID(), Distance2D(actor->GetPosition(), chair->GetPosition()));
+        }
+        auto pick = [&](std::uint32_t salt) {
+            return seated[RestPose::Mix(table.beats.sequence * 7919 + salt) % seated.size()];
+        };
+        switch (table.beats.Update(dt, static_cast<int>(seated.size()))) {
+        case TableBeats::Beat::Round:
+            if (!table.worker.get() && !CallTableWorker(seated)) {
+                // No server free: they brought drinks from the bar themselves.
+                for (auto id : seated) {
+                    if (auto actor = managed.at(id).handle.get()) {
+                        StartTableDrink(managed.at(id), *actor, false);
+                    }
+                }
+                logger::info("[Tavern] a round at the table; no server was free");
+            }
+            break;
+        case TableBeats::Beat::Drink: {
+            auto& f = managed.at(pick(1));
+            if (auto actor = f.handle.get()) {
+                StartTableDrink(f, *actor, tuning.meals && RestPose::Mix(table.beats.sequence) % 4 == 0);
+            }
+            break;
+        }
+        case TableBeats::Beat::Talk: {
+            const auto a = pick(2);
+            auto b = pick(3);
+            for (std::uint32_t salt = 4; b == a && salt < 12; ++salt) {
+                b = pick(salt);
+            }
+            if (a != b) {
+                const float time = 20.0F + static_cast<float>(RestPose::Mix(table.beats.sequence + a) % 16);
+                managed.at(a).tableLook = b;
+                managed.at(b).tableLook = a;
+                managed.at(a).tableLookTime = managed.at(b).tableLookTime = time;
+                auto* first = RE::TESForm::LookupByID<RE::Actor>(a);
+                auto* second = RE::TESForm::LookupByID<RE::Actor>(b);
+                if (first && second) {
+                    logger::info("[Tavern] {} and {} talk at the table for {:.0f}s", first->GetName(),
+                                 second->GetName(), time);
+                }
+                // Talking over a drink.
+                if (auto actor = managed.at(a).handle.get(); actor && RestPose::Mix(a + b) % 2) {
+                    StartTableDrink(managed.at(a), *actor, false);
+                }
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        // The server on the way.
+        if (auto worker = table.worker.get()) {
+            table.workerTime += dt;
+            auto mark = table.workerMark.get();
+            if (mark && Distance2D(worker->GetPosition(), mark->GetPosition()) < 120) {
+                CallActorMethod(*worker, "PlayIdle", RE::TESForm::LookupByID<RE::TESIdleForm>(SERVE_IDLE));
+                for (auto id : seated) {
+                    if (auto actor = managed.at(id).handle.get()) {
+                        StartTableDrink(managed.at(id), *actor, false);
+                    }
+                }
+                if (auto found = managed.find(table.caller); found != managed.end()) {
+                    found->second.tableLookTime = std::min(found->second.tableLookTime, 4.0F);
+                }
+                logger::info("[Tavern] {} brings a round to the table", worker->GetName());
+                table.worker = {};
+                table.workerMark = {};
+            }
+            else if (table.workerTime > 35 || worker->IsDead() || worker->IsInCombat() || worker->GetCurrentScene()) {
+                if (auto found = managed.find(table.caller); found != managed.end()) {
+                    found->second.tableLook = 0;
+                }
+                logger::info("[Tavern] {} never made it to the table", worker->GetName());
+                table.worker = {};
+                table.workerMark = {};
+            }
+        }
+        // Mugs go down and heads turn back when their time is up.
+        for (auto& [id, f] : managed) {
+            if (f.tableIdleActive && (f.tableIdleTime -= dt) <= 0) {
+                f.tableIdleActive = false;
+                auto actor = f.handle.get();
+                auto chair = f.tableSeat.get();
+                if (actor && chair && SeatedIn(*actor, chair.get()) && !IsSpeaking(*actor)) {
+                    actor->NotifyAnimationGraph("IdleStop");
+                }
+            }
+            if (f.tableLook && (f.tableLookTime -= dt) <= 0) {
+                f.tableLook = 0;
+            }
+        }
+    }
+
+    void FormationController::UpdateBardApplause(RE::PlayerCharacter& player)
+    {
+        const auto& tuning = Settings::GetSingleton().Get().sandbox;
+        auto* bard = RE::TESForm::LookupByID<RE::TESFaction>(0x53514); // JobBardFaction
+        auto* lists = RE::ProcessLists::GetSingleton();
+        if (!sandbox.active || !tuning.areaActivities || !bard || !lists || PlaceFor(player) != RestPlace::Tavern) {
+            bardPerforming = false;
+            return;
+        }
+        bool performing = false;
+        Engine::ForEachHighActor(*lists, [&](RE::Actor& other) {
+            if (!performing && other.Is3DLoaded() && !other.IsDead() && other.GetParentCell() == player.GetParentCell() &&
+                other.GetCurrentScene() && Engine::FactionRank(other, bard) >= 0) {
+                performing = true;
+            }
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+        if (bardPerforming && !performing) {
+            // A song just ended: those standing about applaud.
+            int applauding = 0;
+            for (auto& [id, f] : managed) {
+                auto actor = f.handle.get();
+                auto* state = actor ? actor->AsActorState() : nullptr;
+                if (!actor || !state || !f.sandboxActive || f.restRecovery.walking || f.restPose.kind ||
+                    social.Involves(id) || f.tableSeat.get() || actor->GetOccupiedFurniture().get() ||
+                    !actor->Is3DLoaded() || IsSpeaking(*actor) || actor->GetCurrentScene() ||
+                    state->IsWeaponDrawn() || state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) {
+                    continue;
+                }
+                f.activity = RestActivity::Applaud;
+                BeginRestPose(f, *actor, 1, AreaFeature::None);
+                actor->EvaluatePackage(false, true);
+                ++applauding;
+            }
+            if (applauding) {
+                logger::info("[Tavern] the bard finishes a song; {} companion(s) applaud", applauding);
+            }
+        }
+        bardPerforming = performing;
+    }
+
+    bool FormationController::StartSocialWalk()
+    {
+        const auto walkerID = social.Walker();
+        const auto walkerEntry = managed.find(walkerID);
+        const auto hostEntry = managed.find(social.Partner(walkerID));
+        if (walkerEntry == managed.end() || hostEntry == managed.end()) {
+            return false;
+        }
+        auto& f = walkerEntry->second;
+        auto walker = f.handle.get();
+        auto host = hostEntry->second.handle.get();
+        if (!walker || !host || f.restRecovery.walking || f.slot < 0 ||
+            static_cast<std::size_t>(f.slot) >= markerPool.size()) {
+            return false;
+        }
+        auto anchor = markerPool[static_cast<std::size_t>(f.slot)].get();
+        const auto& settings = Settings::GetSingleton().Get();
+        if (!anchor || !RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESPackage>(0x870 + f.slot,
+                                                                                         settings.pluginName)) {
+            return false;
+        }
+        const auto origin = walker->GetPosition();
+        const auto target = host->GetPosition();
+        auto center = anchor->GetPosition();
+        if (f.restAnchorZSet) {
+            center.z = f.restAnchorZ;
+        }
+        // The partner can rest outside the walker's own area; search a disc covering both.
+        const float radius = std::max({f.sandboxRadius, Distance2D(center, target) + 250,
+                                       Distance2D(center, origin) + 50});
+        const float height = std::max(settings.sandbox.activityHeight, std::abs(target.z - center.z) + 128);
+        const auto area = navigation.RestArea(origin, center, radius, height);
+        const float approach = std::atan2(origin.y - target.y, origin.x - target.x);
+        for (float turn : {0.0F, .6F, -.6F, 1.2F, -1.2F}) {
+            const RE::NiPoint3 desired{target.x + std::cos(approach + turn) * 95,
+                                       target.y + std::sin(approach + turn) * 95, target.z};
+            const auto route = navigation.FindRestDestination(area, desired);
+            if (!route) {
+                continue;
+            }
+            const RE::NiPoint3 point{route->point.x, route->point.y, route->point.z};
+            if (Distance2D(point, target) > 140 || std::abs(point.z - target.z) > 96) {
+                continue;
+            }
+            if (!PrepareAuxMarker(f, *walker, point, true)) {
+                return false;
+            }
+            f.activityTarget = {};
+            f.pendingFeature = AreaFeature::None;
+            f.pendingFeatureRef = {};
+            f.socialWalk = true;
+            BeginRestWalk(f, RestWalkBudget(route->routeLength));
+            // Started outside ApplySandbox, so switch to the walking package here.
+            f.socialHold = false;
+            f.socialPhase = 2;
+            SetSocialFlag(f.slot, 2);
+            if (!IsSpeaking(*walker) && !walker->GetCurrentScene()) {
+                walker->EvaluatePackage(false, true);
+            }
+            logger::info("[Social] {} walks over to talk with {}; distance={:.0f} route={:.0f}",
+                         walker->GetName(), host->GetName(), Distance2D(origin, target), route->routeLength);
+            return true;
+        }
+        logger::info("[Social] {} has no route to {}; reachable={} limited={}", walker->GetName(),
+                     host->GetName(), area.distance.size(), area.limited);
+        return false;
+    }
+
+    void FormationController::EndSocialWalk(ManagedFollower& f, bool cancelPair)
+    {
+        f.socialWalk = false;
+        if (cancelPair) {
+            social.Cancel();
+            social.cooldown = 10;
+        }
+        if (!f.restRecovery.walking) {
+            return;
+        }
+        f.restRecovery.Finish();
+        auto actor = f.handle.get();
+        // Arrival: hold them for the talk straight away rather than handing back to native sandbox.
+        f.socialHold = actor && social.Holds(actor->GetFormID());
+        f.socialPhase = f.socialHold ? 1 : 0;
+        SetSocialFlag(f.slot, f.socialPhase);
+        if (actor && !IsSpeaking(*actor) && !actor->GetCurrentScene()) {
+            actor->EvaluatePackage(false, true);
+        }
+    }
+
     void FormationController::UpdateSocial(float dt)
     {
-        if (!sandbox.AllowsSocial(Settings::GetSingleton().Get().sandbox)) {
+        // Whoever held a drink through a conversation puts it down when it ends.
+        auto putDownDrinks = [&]() {
+            for (auto& [id, f] : managed) {
+                if (f.socialLoop && !social.Involves(id)) {
+                    f.socialLoop = false;
+                    if (auto actor = f.handle.get(); actor && actor->Is3DLoaded() && !IsSpeaking(*actor) &&
+                                                      !actor->GetCurrentScene()) {
+                        actor->NotifyAnimationGraph("IdleStop");
+                    }
+                }
+            }
+        };
+        const auto& tuning = Settings::GetSingleton().Get().sandbox;
+        if (!sandbox.AllowsSocial(tuning)) {
             social.Reset();
             for (auto& [id, f] : managed) {
                 f.patron = {};
                 f.patronTimer = 0;
                 f.patronGesture = false;
+                if (f.socialWalk) {
+                    EndSocialWalk(f, false);
+                }
             }
+            putDownDrinks();
             return;
         }
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const auto place = player ? PlaceFor(*player) : RestPlace::Wild;
+        social.style = StyleFor(place, tuning.areaActivities);
         std::vector<SocialCandidate> candidates;
         for (auto& [id, f] : managed) {
             if (auto actor = f.handle.get(); actor && SocialEligible(*actor)) {
@@ -3550,18 +4934,32 @@ namespace Wayfarer
         }
         std::sort(candidates.begin(), candidates.end(), [](auto& a, auto& b) { return a.id < b.id; });
         const int before = social.count;
+        const bool wasGathering = social.gathering;
         social.Update(dt, candidates, [](RE::FormID a, RE::FormID b) {
             auto* first = RE::TESForm::LookupByID<RE::Actor>(a);
             auto* second = RE::TESForm::LookupByID<RE::Actor>(b);
             bool detail = false;
             return first && second && first->HasLineOfSight(second, detail);
         });
-        if (!before && social.count) {
-            auto* first = RE::TESForm::LookupByID<RE::Actor>(social.members[0]);
-            auto* second = RE::TESForm::LookupByID<RE::Actor>(social.members[1]);
-            if (first && second) {
-                logger::info("[Social] conversation: {} and {}; brief pair focus", first->GetName(),
-                             second->GetName());
+        auto* first = RE::TESForm::LookupByID<RE::Actor>(social.members[0]);
+        auto* second = RE::TESForm::LookupByID<RE::Actor>(social.members[1]);
+        if (!before && social.count && first && second) {
+            logger::info("[Social] conversation: {} and {}; {}", first->GetName(), second->GetName(),
+                         social.gathering ? "walking over first" : "already together");
+            if (social.gathering && !StartSocialWalk()) {
+                social.Cancel();
+                social.cooldown = 10;
+            }
+        }
+        if (social.count && !social.gathering && (!before || wasGathering) && first && second) {
+            logger::info("[Social] {} and {} talking for {:.0f}s in the {}{}", first->GetName(), second->GetName(),
+                         social.duration, PlaceName(place), social.style.shareDrink ? ", over a drink" : "");
+        }
+        putDownDrinks();
+        // The planner stops gathering on arrival (talk begins) or cancellation; end the walk either way.
+        for (auto& [id, f] : managed) {
+            if (f.socialWalk && social.Walker() != id) {
+                EndSocialWalk(f, false);
             }
         }
         for (auto& [id, f] : managed) {
@@ -3585,11 +4983,23 @@ namespace Wayfarer
             return nullptr;
         }
         auto* actor = GetSlotFollower(slot);
-        if (!actor || !SocialEligible(*actor)) {
+        if (!actor) {
             return nullptr;
         }
         const auto found = managed.find(actor->GetFormID());
-        if (found != managed.end() && found->second.patronTimer > 0 && !social.Listener(actor->GetFormID())) {
+        if (found != managed.end() && found->second.tableLook && found->second.tableSeat.get()) {
+            // Seated at the inn table: turned to a companion, or watching for the server.
+            auto* other = RE::TESForm::LookupByID<RE::Actor>(found->second.tableLook);
+            if (other && other->Is3DLoaded() && !other->IsDead() && SocialSpace(*other) == SocialSpace(*actor) &&
+                Distance2D(actor->GetPosition(), other->GetPosition()) < 3000) {
+                return other;
+            }
+            return nullptr;
+        }
+        if (!SocialEligible(*actor)) {
+            return nullptr;
+        }
+        if (found != managed.end() && found->second.patronTimer > 0 && !social.Involves(actor->GetFormID())) {
             auto patron = found->second.patron.get();
             if (patron && !patron->IsDead() && !patron->IsInCombat() && !patron->GetCurrentScene() &&
                 SocialSpace(*actor) == SocialSpace(*patron) &&
@@ -3614,9 +5024,12 @@ namespace Wayfarer
         if (Length({velocity.x, velocity.y}) > 20) {
             return nullptr;
         }
-        auto* target = RE::TESForm::LookupByID<RE::Actor>(social.Listener(actor->GetFormID()));
+        // The waiting partner watches the other approach once they are close.
+        const auto partner = social.Holds(actor->GetFormID()) ? social.Partner(actor->GetFormID()) : 0;
+        const float reach = social.gathering ? 600.0F : SocialPlanner::leaveDistance;
+        auto* target = RE::TESForm::LookupByID<RE::Actor>(partner);
         return target && SocialEligible(*target) && SocialSpace(*actor) == SocialSpace(*target) &&
-                       Distance2D(actor->GetPosition(), target->GetPosition()) <= SocialPlanner::leaveDistance
+                       Distance2D(actor->GetPosition(), target->GetPosition()) <= reach
                    ? target
                    : nullptr;
     }
@@ -3631,15 +5044,24 @@ namespace Wayfarer
         auto& follower = managed.at(actor->GetFormID());
         if (follower.patronTimer > 0 && follower.patronGesture) {
             follower.patronGesture = false;
+            return RE::TESForm::LookupByID<RE::TESIdleForm>((social.turn + social.sequence) % 3 == 0 ? 0x58B46
+                                                                                                     : 0x58B45);
         }
-        else if (social.TakeGesture(actor->GetFormID())) {
-        }
-        else {
+        if (!social.TakeGesture(actor->GetFormID())) {
             return nullptr;
         }
-
-        return RE::TESForm::LookupByID<RE::TESIdleForm>((social.turn + social.sequence) % 3 == 0 ? 0x58B46
-                                                                                                 : 0x58B45);
+        if (social.style.shareDrink) {
+            // At the inn the pair talk over a drink; once it is in hand, turns pass without gestures.
+            return std::exchange(follower.socialLoop, true)
+                       ? nullptr
+                       : RE::TESForm::LookupByID<RE::TESIdleForm>(SHARED_DRINK_IDLE);
+        }
+        const auto& tuning = Settings::GetSingleton().Get().sandbox;
+        return RE::TESForm::LookupByID<RE::TESIdleForm>(
+            ConversationIdle(PlaceFor(*actor),
+                             RestPose::Mix(static_cast<std::uint32_t>(social.turn) + social.sequence * 31 +
+                                           actor->GetFormID()),
+                             tuning.areaActivities));
     }
 
     void FormationController::ReportSocialIdle(RE::Actor* actor, bool accepted)
@@ -3739,8 +5161,7 @@ namespace Wayfarer
         order = value;
         sandbox.Reset();
         for (auto& [id, f] : managed) {
-            f.anchorSet = false;
-            f.restAnchorZSet = false;
+            ClearRestAnchor(f);
         }
         SetMode(value == PartyOrder::kRoam    ? FormationMode::kSandbox
                 : value == PartyOrder::kScout ? FormationMode::kLead
@@ -3825,6 +5246,411 @@ namespace Wayfarer
             }
             result.push_back(
                 {delta.x * right.x + delta.y * right.y, delta.x * forward.x + delta.y * forward.y});
+        }
+        return result;
+    }
+
+    bool FormationController::LootScoutPermitted() const
+    {
+        return Settings::GetSingleton().Get().loot.enabled && enabled && mode != FormationMode::kVanilla &&
+               !IsRelaxing() && order != PartyOrder::kRoam && !sandbox.active && loadReleaseTime <= 0;
+    }
+
+    bool FormationController::HasLootScouts() const
+    {
+        return std::any_of(managed.begin(), managed.end(),
+                           [](const auto& entry) { return entry.second.scout.Active(); });
+    }
+
+    void FormationController::ForgetLootArea()
+    {
+        lootSeen.clear();
+        lootBackoff.clear();
+        lootContents.clear();
+        lootRoutes.clear();
+        lootSurvey = {};
+        lootArea = {};
+        lootAreaSpace = 0;
+    }
+
+    void FormationController::UpdateLootScouts(RE::PlayerCharacter& player, float dt)
+    {
+        const auto& tuning = Settings::GetSingleton().Get().loot;
+        lootClock += dt;
+        const auto opened = Loot::ConsumeActivations();
+        lootSeen.insert(opened.begin(), opened.end());
+        // Never in someone's house, an inn, a temple, a shop or a castle; a scout already out
+        // is called back on entering one.
+        const bool inhabited = !tuning.inhabitedInteriors && InhabitedInterior(PlaceFor(player));
+        if (inhabited != lootInhabited) {
+            lootInhabited = inhabited;
+            logger::info("[Loot] {} the {}", inhabited ? "paused inside" : "resumed; left", PlaceName(PlaceFor(player)));
+        }
+        const bool permitted = LootScoutPermitted() && !inhabited;
+        for (auto& [id, f] : managed) {
+            f.scoutCooldown = std::max(0.0F, f.scoutCooldown - dt);
+            if (!f.scout.Active()) {
+                continue;
+            }
+            auto actor = f.handle.get();
+            auto target = f.scoutTarget.ref.get();
+            // Losing control ends the visit at once; EndLootScout still stands a kneeling follower up.
+            bool released =
+                !actor || !permitted || HandHolding::OwnsMovement(id) ||
+                HandHolding::GetApproach().actor == id ||
+                (!tuning.finder.empty() && !Loot::MayScout(tuning.finder, HandHolding::ReferenceKey(*actor)));
+            if (!released) {
+                if (const auto reason = UsabilityRejection(*actor, player); !reason.empty()) {
+                    LogDiagnostic(id, actor->GetName(), reason.c_str());
+                    released = true;
+                }
+            }
+            if (released) {
+                EndLootScout(f, actor.get(), Loot::End::Released); // Includes choosing a new finder.
+                ReleaseTravel(f, actor.get());
+                continue;
+            }
+            // Every other reason lets a kneeling follower stand up before walking away.
+            auto external = Loot::End::None;
+            if (!target || target->IsDisabled() || target->IsDeleted() || !target->Is3DLoaded() ||
+                !InSameTravelSpace(*target, player)) {
+                external = Loot::End::Lost;
+            }
+            else if (std::find(opened.begin(), opened.end(), f.scoutTarget.id) != opened.end()) {
+                external = Loot::End::Claimed;
+            }
+            else if (f.scoutTarget.kind != Loot::Kind::Item && (f.scoutInspect -= dt) <= 0) {
+                // Catches loot taken without an activation event, such as a quick-loot menu.
+                f.scoutInspect = 1.0F;
+                const auto contents = Loot::Inspect(*target, f.scoutTarget.kind, tuning.valuableGold);
+                if (!Loot::WorthPointingOut(f.scoutTarget.kind, contents)) {
+                    external = Loot::End::Emptied;
+                }
+                f.scoutTarget.valuable = f.scout.valuable = contents.valuable;
+            }
+            // Bodies can still be settling when they are spotted.
+            const auto center = target && f.scoutTarget.kind == Loot::Kind::Body ? Loot::Center(*target)
+                                                                                 : f.scoutTarget.center;
+            const auto pos = actor->GetPosition();
+            const bool facing = f.scout.phase == Loot::Phase::Turn && Loot::Face(*actor, center, dt);
+            const auto previousPhase = f.scout.phase;
+            auto end = f.scout.Tick(dt, Distance2D(pos, center) - (f.scoutTarget.reach + Loot::arrivalSlack),
+                                    Distance2D(player.GetPosition(), center), tuning.leaveDistance, facing,
+                                    tuning.searchSeconds, external);
+            if (end == Loot::End::None && previousPhase != Loot::Phase::Present &&
+                f.scout.phase == Loot::Phase::Present) {
+                logger::info("[Loot] {} shows {:08X}; rejoining in {:.0f}s if left unopened", actor->GetName(),
+                             f.scoutTarget.id, Loot::presentSeconds);
+            }
+            if (end == Loot::End::None && f.scout.reached && !f.scoutParked &&
+                (!target || !Loot::Reaches(*actor, *target, center))) {
+                // Stopped on the wrong side of something (a wall, bars, a railing): do not kneel at it.
+                end = Loot::End::Stalled;
+            }
+            if (end == Loot::End::None && f.scout.reached && !f.scoutParked) {
+                // Settle the travel package where they stopped, so it never tugs them out of the pose.
+                // Reaching a find also spends the area: no more searching until the player moves on.
+                f.scoutParked = true;
+                f.scoutTarget.marker = pos;
+                lootArea.Finish(center.x, center.y);
+                lootAreaSpace = SocialSpace(player);
+                logger::info("[Loot] {} reached {:08X}; no more finds until you move {:.0f} units away",
+                             actor->GetName(), f.scoutTarget.id, tuning.areaDistance);
+            }
+            if (end == Loot::End::None && f.scout.ConsumeSearch()) {
+                f.scoutSawIdle = false;
+                f.scoutIdleGap = 0;
+                f.scoutRetries = 0;
+                static_cast<void>(Loot::Search(*actor, f.scoutTarget));
+            }
+            if (end == Loot::End::None && f.scout.phase == Loot::Phase::Search) {
+                // A package re-evaluation elsewhere can knock them out of the loop; resume it.
+                if (Loot::IdlePlaying(*actor)) {
+                    f.scoutSawIdle = true;
+                    f.scoutIdleGap = 0;
+                }
+                else if (f.scoutSawIdle && (f.scoutIdleGap += dt) > .75F && f.scoutRetries < 2) {
+                    ++f.scoutRetries;
+                    f.scoutSawIdle = false;
+                    f.scoutIdleGap = 0;
+                    logger::info("[Loot] {} was interrupted while searching; resuming", actor->GetName());
+                    static_cast<void>(Loot::Search(*actor, f.scoutTarget));
+                }
+            }
+            if (end == Loot::End::None && f.scout.ConsumeRise()) {
+                Loot::Stand(*actor);
+            }
+            if (end == Loot::End::None && !DriveLootScout(f, *actor, player, false)) {
+                end = Loot::End::Released;
+            }
+            if (end != Loot::End::None) {
+                EndLootScout(f, actor.get(), end);
+                ReleaseTravel(f, actor.get());
+            }
+        }
+        lootScanTimer += dt;
+        if (permitted && lootScanTimer >= 1.0F) {
+            lootScanTimer = 0;
+            StartLootScout(player);
+        }
+    }
+
+    void FormationController::StartLootScout(RE::PlayerCharacter& player)
+    {
+        const auto& tuning = Settings::GetSingleton().Get().loot;
+        // Only one companion is ever away at a find.
+        if (HasLootScouts()) {
+            lootSurvey = {};
+            return;
+        }
+        const auto playerPos = player.GetPosition();
+        if (lootArea.done && lootAreaSpace != SocialSpace(player)) {
+            lootArea = {};
+        }
+        // One find per area: after the finder reaches one, wait until the player has moved on.
+        if (lootArea.Holds(playerPos.x, playerPos.y, tuning.areaDistance)) {
+            lootSurvey = {};
+            return;
+        }
+        std::erase_if(lootBackoff, [&](const auto& entry) { return entry.second <= lootClock; });
+        if (lootSeen.size() > 4096 || lootContents.size() > 4096 || lootRoutes.size() > 4096) {
+            lootSeen.clear();
+            lootContents.clear();
+            lootRoutes.clear();
+        }
+        struct Scout
+        {
+            ManagedFollower* follower{};
+            RE::NiPointer<RE::Actor> actor;
+            std::optional<RestReachability> ground; // Navmesh they can walk to, explored on first need.
+        };
+        std::vector<Scout> free;
+        const auto handPartner = HandHolding::GetApproach().actor;
+        for (auto& [id, f] : managed) {
+            if (f.scout.Active() || f.scoutCooldown > 0 || HandHolding::OwnsMovement(id) ||
+                handPartner == id ||
+                std::any_of(travelBanterPairs.begin(), travelBanterPairs.end(),
+                            [&](const auto& pair) { return pair.Contains(id); })) {
+                continue;
+            }
+            auto actor = f.handle.get();
+            if (actor &&
+                Loot::MayScout(tuning.finder,
+                               tuning.finder.empty() ? "" : HandHolding::ReferenceKey(*actor)) &&
+                !actor->GetCurrentScene() && !IsSpeaking(*actor) &&
+                UsabilityRejection(*actor, player).empty()) {
+                free.push_back({&f, actor});
+            }
+        }
+        if (free.empty()) {
+            lootSurvey = {};
+            return;
+        }
+        std::vector<std::pair<float, RE::NiPointer<RE::TESObjectREFR>>> finds;
+        for (const auto& handle : Loot::Collect(player, tuning.leaveDistance * .8F, tuning)) {
+            auto ref = handle.get();
+            if (ref && !lootSeen.contains(ref->GetFormID()) && !lootBackoff.contains(ref->GetFormID())) {
+                finds.emplace_back(Distance2D(playerPos, Loot::Center(*ref)), ref);
+            }
+        }
+        // Nearest first, so the ray and inventory budget goes where the player is.
+        std::sort(finds.begin(), finds.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        struct Option
+        {
+            RE::NiPointer<RE::TESObjectREFR> ref;
+            Scout* scout{};
+            Loot::Kind kind{};
+            Loot::Contents contents;
+            float playerDistance{}, followerDistance{};
+        };
+        std::vector<Option> options;
+        int rays = 0, reads = 0, routes = 0;
+        bool navigationReady = false;
+        for (const auto& [playerDistance, ref] : finds) {
+            if (rays >= 8) {
+                break;
+            }
+            const auto center = Loot::Center(*ref);
+            Scout* scout = nullptr;
+            float nearest = std::numeric_limits<float>::infinity();
+            for (auto& candidate : free) {
+                const auto pos = candidate.actor->GetPosition();
+                const Loot::Placement placement{Distance2D(pos, center), playerDistance, center.z - pos.z};
+                if (Loot::InReach(placement, tuning) && placement.followerDistance < nearest) {
+                    nearest = placement.followerDistance;
+                    scout = &candidate;
+                }
+            }
+            if (!scout) {
+                continue;
+            }
+            ++rays;
+            if (!Loot::Sees(*scout->actor, *ref, center)) {
+                lootBackoff[ref->GetFormID()] = lootClock + 3.0F;
+                continue;
+            }
+            const auto kind = Loot::KindOf(*ref);
+            auto cached = lootContents.find(ref->GetFormID());
+            if (cached == lootContents.end()) {
+                if (reads >= 6) {
+                    continue; // Read the rest next second.
+                }
+                ++reads;
+                cached =
+                    lootContents.emplace(ref->GetFormID(), Loot::Inspect(*ref, kind, tuning.valuableGold))
+                        .first;
+            }
+            if (!Loot::WorthPointingOut(kind, cached->second)) {
+                lootSeen.insert(ref->GetFormID());
+                continue;
+            }
+            // Seeing it is not enough: there must be a short walk to a spot beside it.
+            auto memo = lootRoutes.find(ref->GetFormID());
+            if (memo == lootRoutes.end() || memo->second.until <= lootClock) {
+                if (routes >= 4) {
+                    continue; // Measure the rest next second.
+                }
+                ++routes;
+                if (!navigationReady) {
+                    navigation.Collect(player);
+                    navigationReady = true;
+                }
+                if (!scout->ground) {
+                    const auto from = scout->actor->GetPosition();
+                    scout->ground =
+                        navigation.RestArea(from, from, tuning.searchRadius + 200, Loot::floorHeight + 100);
+                }
+                const auto measured = Loot::Measure(navigation, *scout->ground, *scout->actor, *ref,
+                                                    Loot::Plan(*ref, kind, cached->second.valuable));
+                memo = lootRoutes.insert_or_assign(ref->GetFormID(), LootRouteMemo{measured, lootClock + 5})
+                           .first;
+            }
+            const auto& route = memo->second.route;
+            if (route.Disconnected()) {
+                // Behind a wall, bars or a drop with no walkable way round: never try it here.
+                lootSeen.insert(ref->GetFormID());
+                logger::info("[Loot] Skipped {:08X} \"{}\": no walkable way to it", ref->GetFormID(),
+                             ref->GetDisplayFullName());
+                continue;
+            }
+            if (!Loot::Walkable(route, nearest, tuning)) {
+                lootBackoff[ref->GetFormID()] = lootClock + 4.0F; // Only a long way round, for now.
+                continue;
+            }
+            options.push_back({ref, scout, kind, cached->second, playerDistance, nearest});
+        }
+        // Look around for a moment before choosing, so a richer find a few steps further in still wins.
+        if (!lootSurvey.Update(1.0F, !options.empty())) {
+            return;
+        }
+        lootSurvey = {};
+        const auto& best =
+            *std::min_element(options.begin(), options.end(), [](const auto& a, const auto& b) {
+                return Loot::Richer(a.contents, a.playerDistance, b.contents, b.playerDistance);
+            });
+        auto& f = *best.scout->follower;
+        auto& actor = *best.scout->actor;
+        auto& ref = *best.ref;
+        // Leave formation travel cleanly; the slot's travel package now walks them to the find.
+        f.avoidance.Reset();
+        f.goal.Release();
+        f.individual.ResetMotion();
+        f.haveRoleOffset = false;
+        f.distantCatchup = false;
+        TravelSpeed::Clear(static_cast<std::uint32_t>(f.slot));
+        f.speedScale = 1.0F;
+        f.scoutTarget = Loot::Plan(ref, best.kind, best.contents.valuable);
+        f.scout.Start(best.contents.valuable);
+        f.scoutInspect = 1.0F;
+        lootSeen.insert(ref.GetFormID());
+        if (!DriveLootScout(f, actor, player, true)) {
+            f.scout.Stop();
+            f.scoutTarget = {};
+            return;
+        }
+        constexpr const char* kinds[]{"container", "body", "item"};
+        logger::info("[Loot] {} chose {} {:08X} \"{}\" worth {} gold (best item {}) from {} finds in view, "
+                     "{:.0f} units away{}",
+                     actor.GetName(), kinds[static_cast<int>(best.kind)], ref.GetFormID(),
+                     ref.GetDisplayFullName(), best.contents.total, best.contents.bestValue, options.size(),
+                     best.followerDistance, best.contents.valuable ? " (valuable)" : "");
+    }
+
+    bool FormationController::DriveLootScout(ManagedFollower& f, RE::Actor& actor,
+                                             RE::PlayerCharacter& player, bool retarget)
+    {
+        const auto& settings = Settings::GetSingleton().Get();
+        auto* quest = EnsureQuest();
+        auto* package = quest && quest->IsRunning()
+                            ? RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESPackage>(
+                                  PackageLocal(f.slot), settings.pluginName)
+                            : nullptr;
+        auto* marker = package ? EnsureMarker(f, player) : nullptr;
+        if (!marker) {
+            return false;
+        }
+        const auto goal = f.scoutTarget.marker;
+        if (retarget || marker->GetPosition().GetDistance(goal) > 8) {
+            if (marker->GetParentCell() != player.GetParentCell()) {
+                marker->MoveTo(&player);
+            }
+            marker->SetPosition(goal);
+            retarget = true;
+        }
+        const bool distant =
+            f.scout.phase == Loot::Phase::Approach && Distance2D(actor.GetPosition(), goal) > 600;
+        package->packData.packFlags.set(RE::PACKAGE_DATA::GeneralFlag::kPreferredSpeed);
+        package->packData.maxSpeed =
+            static_cast<RE::PACKAGE_DATA::PreferredSpeed>(distant ? TravelPace::kJog : TravelPace::kWalk);
+        f.travelActive = true;
+        if (retarget && actor.GetCurrentPackage() == package) {
+            actor.EvaluatePackage(false, true);
+        }
+        return true;
+    }
+
+    void FormationController::EndLootScout(ManagedFollower& f, RE::Actor* actor, Loot::End reason)
+    {
+        if (!f.scout.Active()) {
+            return;
+        }
+        // Never leave a follower frozen in the kneel, whatever ended the visit.
+        if (actor && f.scout.phase == Loot::Phase::Search && actor->Is3DLoaded() && !actor->IsDead()) {
+            Loot::Stand(*actor);
+        }
+        logger::info("[Loot] {} leaves {:08X} after {:.1f}s: {}", actor ? actor->GetName() : "Companion",
+                     f.scoutTarget.id, f.scout.elapsed, Loot::EndName(reason));
+        f.scout.Stop();
+        f.scoutTarget = {};
+        f.scoutParked = f.scoutSawIdle = false;
+        f.scoutIdleGap = 0;
+        f.scoutRetries = 0;
+        f.scoutCooldown = Loot::Cooldown(reason);
+    }
+
+    std::vector<FormationController::LootScoutView> FormationController::LootScouts() const
+    {
+        std::lock_guard lock(stateMutex);
+        std::vector<LootScoutView> result;
+        for (const auto& [id, f] : managed) {
+            if (f.scout.Active() && !explicitExclusions.contains(id)) {
+                result.push_back({f.handle, f.scout.valuable, f.scout.elapsed});
+            }
+        }
+        return result;
+    }
+
+    std::vector<RE::ActorHandle> FormationController::RestDialogueActors() const
+    {
+        std::lock_guard lock(stateMutex);
+        std::vector<RE::ActorHandle> result;
+        if (!enabled || !sandbox.active) {
+            return result;
+        }
+        for (const auto& [id, follower] : managed) {
+            if (follower.sandboxActive && !explicitExclusions.contains(id)) {
+                result.push_back(follower.handle);
+            }
         }
         return result;
     }
@@ -3977,7 +5803,11 @@ namespace Wayfarer
                     row.state = unavailable;
                 }
                 else if (managed.at(id).travelActive) {
-                    row.state = managed.at(id).sandboxActive ? "Sandboxing" : "Travelling with you";
+                    const auto& f = managed.at(id);
+                    row.state = f.scout.Active()
+                                    ? (f.scout.valuable ? "Found something valuable" : "Found something")
+                                : f.sandboxActive ? "Sandboxing"
+                                                  : "Travelling with you";
                     ++view.activeCount;
                 }
                 else {

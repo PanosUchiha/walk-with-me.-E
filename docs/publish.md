@@ -1,14 +1,19 @@
 # Publish the release
 
-Run `tools/package-release.py` after building the matching DLL, six scripts and
+Run `tools/package-release.py` after building the matching DLL, seven scripts and
 ESP and reviewing the changelog and validation record. It creates these public
-files in `release`:
+files in the selected output directory (`build-release.ps1` defaults to `release/0.2.2`):
 
-- `Walk-With-Me-0.2.1-SE-AE.zip`
-- `Walk-With-Me-0.2.1-Command-Gestures.zip` (optional add-on)
-- `Walk-With-Me-0.2.1-Source.zip`
+- `Walk-With-Me-0.2.2-SE-AE.zip` (Main Files)
+- `Walk-With-Me-0.2.2-Command-Gestures.zip` (Optional Files)
+- `Walk-With-Me-0.2.2-Source.zip` (complete source; developer download)
 - A SHA-256 file for each archive
-- `Walk-With-Me-0.2.1-CHANGELOG.md`
+- `Walk-With-Me-0.2.2-CHANGELOG.md`
+
+Use `docs/nexus-release-0.2.2.md` for the release post and file descriptions.
+The changelog compares against public 0.2.0; 0.2.1 was packaged locally.
+The gesture guide links to the mod's Files tab. That link will offer this add-on
+only after it is uploaded; packaging alone does not make it downloadable there.
 
 Attach all three ZIPs and checksums to the same release. Link the complete source
 archive from the mod page and keep it available with the corresponding DLL.

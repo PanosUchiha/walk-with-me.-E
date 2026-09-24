@@ -29,12 +29,12 @@ when using MO2; deploy mods before running it with Vortex.
 Third-person clips are in the add-on; FPI's first-person clips are separate.
 Gesture Animation Remix is not needed.
 
-Open Animation Replacer is also needed for the shoulder recovery animation and
-locally generated clasp poses. The base follower features do not require a
+Open Animation Replacer is also needed for locally generated TETHER clasp poses.
+The base follower features do not require a
 behavior generator.
 
 Animation requirements:
-- [Open Animation Replacer](https://www.nexusmods.com/skyrimspecialedition/mods/92109): command signals, shoulder recovery and optional clasp poses.
+- [Open Animation Replacer](https://www.nexusmods.com/skyrimspecialedition/mods/92109): command signals and optional TETHER clasp poses.
 - [First Person Interactions](https://www.nexusmods.com/skyrimspecialedition/mods/123129): command signals, including the shared trigger used in third person.
 - [Offset Movement Animation](https://www.nexusmods.com/skyrimspecialedition/mods/110408): command signals; install the complete mod and regenerate with Nemesis or Pandora.
 
@@ -43,9 +43,11 @@ that plugin in an error, follow the requirements of the animation pack using it.
 It does not fix missing WWM conditions. `requiredPlugin: "Walk With Me"` is correct:
 it identifies the SKSE condition provider, not the ESP filename.
 
-Hand holding is experimental and off by default. It uses a TETHER-based physics grip and authored clasp poses. Generate the optional
-clasp clips from your own Skyrim files using HAND_HOLDING.md. The public archive
-contains the generator, not the game-derived clips.
+Hand holding is experimental and off by default. Classic is the default method
+and needs no generated clips. The optional TETHER method uses a physics grip and
+OAR clasp poses generated from your own Skyrim files using HAND_HOLDING.md.
+The public archive includes the generator; the gesture add-on does not contain
+clasp clips. Post-victory reactions are shelved in 0.2.2.
 
 ## Credits
 

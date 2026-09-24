@@ -2,6 +2,7 @@
 
 #include "hand_hold_state.h"
 #include "key_chord.h"
+#include "loot_scout_policy.h"
 #include "party_behavior.h"
 #include "travel_planner.h"
 #include <filesystem>
@@ -28,11 +29,13 @@ namespace Wayfarer
         bool enforceNFF{true};
         bool enforceCustomFollowers{true};
         bool walkingBanter{true};
-        bool victoryCelebrations{true};
+        bool victoryCelebrations{false}; // Shelved; ignored by release configuration.
         bool conversationAwareness{true}, personalities{true}, lookouts{true};
         float conversationClearance{150}, lookoutAfter{60};
         std::unordered_map<std::string, int> personalityOverrides;
         bool showOrderHUD{true};
+        bool restDialogueIcons{true};
+        bool animateChatIcons{true};
         bool hudPanel{true}, commandGestures{true}, pointingSignal{true}, companionSignal{true};
         bool gestureAwareness{true};
         int gamepadBinding{1};
@@ -51,6 +54,7 @@ namespace Wayfarer
             value.resumeDistance = 508.0F;
             return value;
         }();
+        Loot::Tuning loot;
         float distantCatchupStart{900};
         float distantCatchupEnd{500};
         bool teleportCatchup{true};

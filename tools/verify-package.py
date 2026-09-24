@@ -175,9 +175,13 @@ assert (root/'Interface/WalkWithMe/teleport.svg').is_file(), 'game teleport artw
 
 import xml.etree.ElementTree as ET
 art=root/'Interface/WalkWithMe'
-expected={'natural','arrow','wing-a','wing-b','shield','logs','flame','ember','wheel-slice','teleport'}
+expected={'natural','arrow','wing-a','wing-b','shield','logs','flame','ember','wheel-slice','teleport','chat','loot'}
 assert {p.stem for p in art.glob('*.svg')}==expected
-assert not list(art.glob('*.png')), 'obsolete generated raster artwork must not ship'
+assert {p.name for p in art.glob('*.png')} == {'menu-background.png'}, 'only the settings background PNG should ship'
+background = (art/'menu-background.png').read_bytes()
+assert background[:8] == b'\x89PNG\r\n\x1a\n' and background[12:16] == b'IHDR', 'invalid settings background PNG'
+assert struct.unpack_from('>II', background, 16) == (742, 465), 'settings background aspect ratio changed'
+assert background[24:26] == bytes((8, 6)), 'settings background must retain its RGBA transparency'
 for name in expected:
     data=(art/(name+'.svg')).read_bytes();node=ET.fromstring(data)
     assert node.attrib['viewBox']=='0 0 512 512'
@@ -191,7 +195,7 @@ assert 'SIL OPEN FONT LICENSE' in (root/'ThirdParty/CinzelDecorative/OFL.txt').r
 for name in ['Wayfarer', 'WayfarerQuestScript']:
     pex = (root / 'Scripts' / (name + '.pex')).read_bytes()
     assert pex[:4] == b'\xfa\x57\xc0\xde', 'expected Skyrim big-endian PEX'
-    assert b'ReportAliasSync' in pex, 'victory reactions require the matching compiled alias-sync bridge'
+    assert b'ReportAliasSync' in pex, 'legacy alias-sync bridge must remain compatible'
 assert (root / 'SKSE/Plugins/Wayfarer.dll').read_bytes()[:2] == b'MZ'
 recovery = (root / 'Scripts/WayfarerRecovery.pex').read_bytes()
 assert recovery[:4] == b'\xfa\x57\xc0\xde' and all(name in recovery for name in (b'ConsumePush', b'PushActorAway')), 'matching unstick bridge missing'
@@ -201,6 +205,10 @@ assert tether[:4] == b'\xfa\x57\xc0\xde' and b'AddHavokBallAndSocketConstraint' 
 assert b'RequestTetherHandoff' in (root / 'Scripts/WayfarerQuestScript.pex').read_bytes()
 if '--public' in sys.argv:
     assert not (root / 'meshes/OpenAnimationReplacer/WWM Clasp').exists(), 'generate clasp clips locally, never publish them'
-    assert len(list((root / 'Scripts').glob('*.pex'))) == 6, 'expected six matching compiled scripts'
+    assert len(list((root / 'Scripts').glob('*.pex'))) == 7, 'expected six active scripts and legacy victory cleanup'
+assert not (root / 'meshes/OpenAnimationReplacer/Walk With Me Victory').exists(), 'shelved victory assets must not ship'
+assert 'bVictoryCelebrations' not in (root / 'SKSE/Plugins/Wayfarer.ini').read_text(), 'shelved setting must not ship'
+legacy = (root / 'Scripts/WayfarerVictoryVoice.pex').read_bytes()
+assert b'SetDontMove' in legacy and b'Say' not in legacy and b'Wait' not in legacy, 'legacy helper must only release old holds'
 assert not list(root.rglob('*.bak')), 'backup files must stay out of the package'
 print('Package verified: preserved packages/aliases/globals, dialogue and fragments, SEQ, Skyrim PEX files including unstick bridge, artwork and DLL.')

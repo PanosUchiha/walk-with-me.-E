@@ -24,13 +24,12 @@ namespace Wayfarer::HandHolding
         return op == TetherOp::Disconnect || op == TetherOp::RemoveFollower || op == TetherOp::RemovePlayer ||
                op == TetherOp::ClearOffset;
     }
-    // Acquisition gates, narrowest first. Only the offset fights WWM's own
-    // package, and only the constraint depends on where the hands are, so the
-    // ragdoll bodies are created while the pair is still turning into place
-    // instead of costing three more Papyrus round trips after contact.
+    // Connect beside the player while the WWM arrival target holds position.
+    // Only offset movement needs the old package and its script cleanup gone.
+    // Waiting for that handoff before physics left the pair idle for seconds.
     inline bool NeedsHandoff(TetherOp op)
     {
-        return !IsCleanup(op);
+        return op == TetherOp::Offset;
     }
     inline bool NeedsHeading(TetherOp op)
     {
@@ -74,9 +73,6 @@ namespace Wayfarer::HandHolding
                 }
                 return {};
             }
-            if (!offset) {
-                return TetherOp::Offset;
-            }
             if (!player) {
                 return TetherOp::AddPlayer;
             }
@@ -85,6 +81,9 @@ namespace Wayfarer::HandHolding
             }
             if (!constraint) {
                 return TetherOp::Connect;
+            }
+            if (!offset) {
+                return TetherOp::Offset;
             }
             return {};
         }
@@ -140,6 +139,17 @@ namespace Wayfarer::HandHolding
             }
             return true;
         }
+        // The VM rechecked proximity after dispatch and performed no mutation.
+        // Keep acquired resources and retry on a fresh frame instead of forcing
+        // a full teardown, cooldown and approach for a momentary gait change.
+        bool Defer(TetherOp op)
+        {
+            if (pending != op || IsCleanup(op)) {
+                return false;
+            }
+            pending.reset();
+            return true;
+        }
         bool Done() const
         {
             return started && cancelled && !pending && !player && !follower && !constraint && !offset;
@@ -190,39 +200,33 @@ namespace Wayfarer::HandHolding
         }
     };
 
+    inline bool TetherRetainsApproach(const TetherSession& session, const TetherHandoff& handoff)
+    {
+        return !handoff.actor && (!session.started || !session.cancelled);
+    }
+
     inline bool TetherNear(float distance, float height, bool visible, float limit)
     {
         return std::isfinite(distance) && std::isfinite(height) && distance <= limit &&
                std::abs(height) <= 40 && visible;
+    }
+
+    inline bool CanCorrectTetherFacing(const TetherSession& session)
+    {
+        return session.started && !session.cancelled && !session.pending && !session.player &&
+               !session.follower && !session.constraint;
+    }
+
+    inline bool TetherFacingReady(float headingError, float lateral, int side, float followerSpeed)
+    {
+        return std::isfinite(headingError) && std::abs(headingError) <= .2F && std::isfinite(lateral) &&
+               lateral * side >= 15 && std::isfinite(followerSpeed) && followerSpeed <= 130;
     }
     inline bool TetherGripReady(float distance, float height, float wristGap, bool visible, float limit,
                                 float wristLimit)
     {
         return TetherNear(distance, height, visible, std::min(limit, 80.0F)) && std::isfinite(wristGap) &&
                std::isfinite(wristLimit) && wristGap <= wristLimit;
-    }
-
-    // The ball-and-socket constraint pulls the two palm anchors onto one another
-    // the instant it is created, so a grip formed across a wide gap reads as a
-    // lunge instead of a clasp. Hold out for a close gap first and widen the
-    // requirement only if the pair cannot reach it, so acquisition still
-    // completes on stairs, uneven ground and with mismatched body heights.
-    inline constexpr float tetherGripGapRelaxed = 45.0F;
-    // Short, because an unreachable accurate gap must not cost more time than
-    // the wide gate used to. The acquisition trace prints the measured gap
-    // against the limit every second, so fGripWristGap can be set from a log
-    // rather than guessed for a given body and hand mesh.
-    inline constexpr float tetherGripGapPatience = 1.5F;
-    inline float TetherGripGap(float elapsed, float tight, float relaxed, float patience)
-    {
-        if (!std::isfinite(tight)) {
-            return 0;
-        }
-        if (!std::isfinite(elapsed) || elapsed <= 0 || !std::isfinite(relaxed) || relaxed <= tight ||
-            !std::isfinite(patience) || patience <= 0) {
-            return tight;
-        }
-        return tight + (relaxed - tight) * std::clamp(elapsed / patience, 0.0F, 1.0F);
     }
 
     // The follower is turned into place before any physics body exists. Settling
@@ -233,9 +237,9 @@ namespace Wayfarer::HandHolding
                lateral * side >= 15 && std::isfinite(followerSpeed) && followerSpeed <= 20;
     }
 
-    // Arrival hands movement to offset positioning; it does not attach physics.
-    // Facing and hand contact are checked AFTER offset positioning, avoiding the
-    // r15 requirement to reach an aligned grip before alignment can even begin.
+    // Arrival starts physics setup at the current spot, without a dwell or a
+    // second positioning leg. Actual facing and wrist contact are checked again
+    // before a body/constraint can be created.
     struct TetherArrival
     {
         float elapsed{};
@@ -260,8 +264,7 @@ namespace Wayfarer::HandHolding
                 elapsed = 0;
                 return false;
             }
-            elapsed += dt;
-            return elapsed >= .2F;
+            return true;
         }
     };
 

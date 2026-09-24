@@ -8,6 +8,24 @@ namespace Wayfarer::HandHolding
         return speed > 5 ? std::clamp(180 + speed * 2.0F, 300.0F, 1000.0F) : 0;
     }
 
+    // The marker drives the gait, while Classic validates each actual attachment
+    // step separately. A stopped pair needs valid ground, not a forward corridor.
+    template <class Point, class Resolve, class Hold>
+    std::optional<Point> LocomotionTarget(Point actor, Vec2 direction, float lead, Resolve&& resolve,
+                                          Hold&& hold)
+    {
+        for (float fraction : {1.0F, .5F, .25F}) {
+            if (auto target = resolve(
+                    actor, {actor.x + direction.x * lead * fraction, actor.y + direction.y * lead * fraction},
+                    direction)) {
+                return target;
+            }
+        }
+        // Keep the original grounded fallback: corridor queries deliberately
+        // reject zero-length routes, even on perfectly valid standing ground.
+        return hold(actor);
+    }
+
     inline Vec2 LocomotionDirection(bool attached, float heading, Vec2 velocity, Vec2 fallback)
     {
         if (attached) {

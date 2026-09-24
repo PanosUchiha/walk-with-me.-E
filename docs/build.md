@@ -42,12 +42,13 @@ the source versions used. Different compilers or SDKs may change the DLL bytes.
 
 ## Package
 
-`tools/build-esl.ps1` writes the ESP and SEQ. Compile all six scripts in
+`tools/build-esl.ps1` writes the ESP and SEQ. Compile all seven scripts in
 `package/Scripts/Source` using the Papyrus compiler, vanilla/SKSE imports and
 TESV_Papyrus_Flags.flg. Obtain those game/SDK tools separately.
 
 `build-release.ps1` handles those steps and both DLL builds. Its default paths are
 local to the author; override them, including DependencyPrefix for the legacy build.
+It writes to `release/<version>` by default; `-OutputDirectory` overrides that path.
 
 With the ESP, scripts and assets staged, run from a Git checkout:
 

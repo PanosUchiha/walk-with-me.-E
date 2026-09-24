@@ -20,7 +20,9 @@ Function RequestTetherHandoff(Int slot, Int ticket)
     If slot >= 0 && slot < 10 && ticket != 0
         tetherPriorityTicket = ticket
         tetherPrioritySlot = slot + 1
-        RegisterForSingleUpdate(0.01)
+        ; An idle sweep can service this immediately on this stack. A busy sweep
+        ; keeps the request until its next safe slot boundary; never race cleanup.
+        SyncAliases()
     EndIf
 EndFunction
 
@@ -33,17 +35,8 @@ Bool Function ServiceTetherHandoff()
     Int slot = tetherPrioritySlot - 1
     Int ticket = tetherPriorityTicket
     tetherPrioritySlot = 0
-    If StopSyncForDialogue()
-        Return false
-    EndIf
-    If ticket != Wayfarer.GetTetherHandoffTicket(slot) || Wayfarer.GetSlotFollower(slot)
-        Return true
-    EndIf
-    Int followerID = slot
-    If slot >= 5
-        followerID = slot + 5
-    EndIf
-    ReferenceAlias followerAlias = GetAlias(followerID) as ReferenceAlias
+    ; Validate ticket, dialogue and slot ownership in one main-thread call.
+    ReferenceAlias followerAlias = Wayfarer.GetTetherHandoffAlias(slot, ticket)
     If !followerAlias
         Return true
     EndIf
@@ -81,6 +74,12 @@ Function SyncAliases()
     EndIf
     syncing = true
     Wayfarer.ReportAliasSync(true)
+    ; Priority work precedes allocation/rest queries and the ordinary ten-slot sweep.
+    If tetherPrioritySlot != 0
+        If !ServiceTetherHandoff()
+            Return
+        EndIf
+    EndIf
     If !lookingActors
         lookingActors = new Actor[10]
         lookingTargets = new Actor[10]
@@ -184,6 +183,16 @@ Function SyncAliases()
                 desired.EvaluatePackage()
             EndIf
 
+            ; Acknowledge immediately after this slot's movement cleanup. Rest and
+            ; social queries below must not add VM round trips to grip acquisition.
+            If tetherTicket != 0
+                Wayfarer.ConfirmTetherHandoff(slot, tetherTicket)
+            EndIf
+            If tetherPrioritySlot != 0
+                If !ServiceTetherHandoff()
+                    Return
+                EndIf
+            EndIf
             Actor current = followerAlias.GetActorReference()
             If current && Wayfarer.GetSlotFollower(slot) != current
                 If StopSyncForDialogue()
@@ -243,11 +252,6 @@ Function SyncAliases()
                     Wayfarer.ReportSocialIdle(socialActor, played)
                 EndIf
             EndIf
-        EndIf
-        ; All ClearKeepOffset/EvaluatePackage calls for this slot have returned.
-        ; A ticket captured before cleanup cannot acknowledge a newer session.
-        If tetherTicket != 0
-            Wayfarer.ConfirmTetherHandoff(slot, tetherTicket)
         EndIf
         slot += 1
     EndWhile

@@ -17,17 +17,20 @@ namespace Wayfarer::OrderVisuals
             Logs,
             Flame,
             Ember,
-            Teleport
+            Teleport,
+            ChatBubble,
+            LootChest
         };
+        constexpr Im::ImU32 ivory = IM_COL32(226, 218, 201, 255);
         void Layer(Im::ImDrawList* draw, V center, float size, Asset asset, float alpha, float dx = 0,
                    float dy = 0, float rotation = 0, float sx = 1, float sy = 1, V uv0 = {0, 0},
-                   V uv1 = {1, 1})
+                   V uv1 = {1, 1}, Im::ImU32 tint = ivory)
         {
             static const auto textures = [] {
-                std::array<Im::ImTextureID, 9> value{};
-                constexpr const char* names[]{"natural", "arrow", "wing-a", "wing-b",  "shield",
-                                              "logs",    "flame", "ember",  "teleport"};
-                for (int i = 0; i < 9; ++i) {
+                std::array<Im::ImTextureID, 11> value{};
+                constexpr const char* names[]{"natural", "arrow", "wing-a",   "wing-b", "shield", "logs",
+                                              "flame",   "ember", "teleport", "chat",   "loot"};
+                for (int i = 0; i < 11; ++i) {
                     value[i] = SKSEMenuFramework::LoadTexture(
                         std::string("Data/Interface/WalkWithMe/") + names[i] + ".svg", {256, 256});
                 }
@@ -41,11 +44,26 @@ namespace Wayfarer::OrderVisuals
                 float x = (uv.x - .5F) * size * sx, y = (uv.y - .5F) * size * sy;
                 return V{center.x + dx * size + x * c - y * s, center.y + dy * size + x * s + y * c};
             };
+            const auto opacity = static_cast<Im::ImU32>(255 * std::clamp(alpha, 0.0F, 1.0F));
             D::AddImageQuad(draw, textures[asset], point(uv0), point({uv1.x, uv0.y}), point(uv1),
                             point({uv0.x, uv1.y}), uv0, {uv1.x, uv0.y}, uv1, {uv0.x, uv1.y},
-                            IM_COL32(226, 218, 201, 255 * std::clamp(alpha, 0.0F, 1.0F)));
+                            (tint & ~IM_COL32_A_MASK) | (opacity << IM_COL32_A_SHIFT));
         }
     } // namespace
+    void Chat(Im::ImDrawList* draw, V center, float size, float alpha)
+    {
+        Layer(draw, center, size * 1.08F, ChatBubble, alpha * .45F, 0, .03F, 0, 1, 1, {0, 0}, {1, 1},
+              IM_COL32(0, 0, 0, 255));
+        Layer(draw, center, size, ChatBubble, alpha);
+    }
+    void Loot(Im::ImDrawList* draw, V center, float size, bool valuable, float alpha)
+    {
+        // A soft shadow keeps the white chest legible against snow and bright skies.
+        Layer(draw, center, size * 1.08F, LootChest, alpha * .45F, 0, .03F, 0, 1, 1, {0, 0}, {1, 1},
+              IM_COL32(0, 0, 0, 255));
+        Layer(draw, center, size, LootChest, alpha, 0, 0, 0, 1, 1, {0, 0}, {1, 1},
+              valuable ? IM_COL32(240, 192, 72, 255) : IM_COL32(250, 248, 242, 255));
+    }
     void Sector(Im::ImDrawList* draw, V center, float radius, int mode, Im::ImU32 color)
     {
         static const auto texture =

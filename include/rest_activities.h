@@ -20,7 +20,21 @@ namespace Wayfarer
         Drink,
         Read,
         Stretch,
-        Examine
+        Examine,
+        // Area activities.
+        LookFar,
+        WarmHands,
+        WarmHandsCrouched,
+        Pray,
+        Kneel,
+        Study,
+        Sweep,
+        Nervous,
+        WipeBrow,
+        CleanSword,
+        WarmArms,
+        TableSeat, // A chair at the inn table the party shares; held with the seat package.
+        Applaud
     };
     inline bool SettledRest(RestContext context)
     {
@@ -90,12 +104,49 @@ namespace Wayfarer
             return 0xF50F1;
         case RestActivity::Examine:
             return 0x75C3D;
+        case RestActivity::LookFar:
+            return 0x75C62; // IdleLookFar
+        case RestActivity::WarmHands:
+            return 0xE8642; // IdleWarmHandsStanding
+        case RestActivity::WarmHandsCrouched:
+            return 0xE8643; // IdleWarmHandsCrouched
+        case RestActivity::Pray:
+            return 0x6F300; // IdlePray
+        case RestActivity::Kneel:
+            return 0xEFC64; // IdleSearchBody: the kneeling loop
+        case RestActivity::Study:
+            return 0x977ED; // IdleStudy
+        case RestActivity::Sweep:
+            return 0x640FE; // IdleLooseSweepingStart; the graph supplies the broom
+        case RestActivity::Nervous:
+            return 0x10ACB1; // IdleNervous
+        case RestActivity::WipeBrow:
+            return 0x977EC; // IdleWipeBrow
+        case RestActivity::CleanSword:
+            return 0x3EA33; // IdleCleanSword
+        case RestActivity::WarmArms:
+            return 0x19793; // IdleWarmArms
+        case RestActivity::Applaud:
+            return 0xD8731; // IdleApplaud3
         default:
             return 0xB240A;
         }
     }
+    // One clip and done; everything else is an enter/loop/exit state held until ended.
     inline bool FiniteRestActivity(RestActivity activity)
     {
-        return activity == RestActivity::Stretch || activity == RestActivity::Examine;
+        switch (activity) {
+        case RestActivity::Stretch:
+        case RestActivity::Examine:
+        case RestActivity::LookFar:
+        case RestActivity::Pray:
+        case RestActivity::WipeBrow:
+        case RestActivity::CleanSword:
+        case RestActivity::WarmArms:
+        case RestActivity::Applaud:
+            return true;
+        default:
+            return false;
+        }
     }
 } // namespace Wayfarer

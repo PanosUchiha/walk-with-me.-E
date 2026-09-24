@@ -159,4 +159,7 @@ namespace Wayfarer
 
     [[nodiscard]] std::optional<GroundPoint> TraceGroundStep(GroundPoint origin, GroundPoint goal,
                                                              GroundKey start, const GroundQuery& query);
+    // The ground at `goal`, reached by a straight line over connected navmesh, at any height.
+    [[nodiscard]] std::optional<GroundPoint> TraceGroundExact(GroundPoint origin, Vec2 goal, GroundKey start,
+                                                              const GroundQuery& query);
 } // namespace Wayfarer
