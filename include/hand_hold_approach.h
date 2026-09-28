@@ -8,6 +8,16 @@ namespace Wayfarer::HandHolding
     {
         return std::clamp(connectDistance * .5F, 35.0F, 40.0F);
     }
+    // Classic's pair spacing. The 35-40 unit SeekSpacing put the two bodies shoulder to
+    // shoulder; the upper bound keeps the shared grip inside both arms' reach.
+    inline float ClassicSpacing(float spacing)
+    {
+        return std::isfinite(spacing) ? std::clamp(spacing, 36.0F, 56.0F) : 46.0F;
+    }
+    inline int ClassicSide(int preference, float lateral)
+    {
+        return preference ? (preference < 0 ? -1 : 1) : (lateral < 0 ? -1 : 1);
+    }
     inline bool ReadyAtHand(float lateral, float along, int side, float spacing)
     {
         return std::isfinite(lateral) && std::isfinite(along) && std::abs(lateral * side - spacing) <= 5 &&

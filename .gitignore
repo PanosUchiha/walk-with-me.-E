@@ -12,6 +12,10 @@ __pycache__/
 
 # Local assistant context, not project documentation.
 /CLAUDE.md
+/docs/claude-handoff-*.md
+
+# Deferred local investigation.
+/docs/script-load-review-2026-09-26.md
 
 # Regenerated staging outputs; ship source, settings and licensed assets.
 /package/Wayfarer.esp

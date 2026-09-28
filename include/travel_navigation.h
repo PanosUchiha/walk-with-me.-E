@@ -11,7 +11,14 @@ namespace Wayfarer
     class TravelNavigation
     {
       public:
-        void Collect(RE::PlayerCharacter& a_player);
+        // Navmesh of every attached cell within `reach` of the player (at most one cell width).
+        void Collect(RE::PlayerCharacter& a_player, float reach = 1200.0F);
+        // The farthest open ground on the straight line toward `goal`: short of it where the
+        // navmesh ends, as at a rock, a cliff or the edge of what was collected.
+        [[nodiscard]] std::optional<RE::NiPoint3> Reach(RE::NiPoint3 origin, Vec2 goal) const
+        {
+            return Trace(origin, goal);
+        }
         [[nodiscard]] std::optional<RE::NiPoint3> ResolveConnected(RE::Actor& anchor, Vec2 goal,
                                                                    Vec2 direction) const;
         [[nodiscard]] std::optional<RE::NiPoint3> RestPoint(RE::NiPoint3 position) const;

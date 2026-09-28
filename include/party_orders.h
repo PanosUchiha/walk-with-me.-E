@@ -4,23 +4,24 @@
 #include <array>
 namespace Wayfarer
 {
-    inline constexpr std::array<FormationMode, 6> OrderModes{
-        FormationMode::kDynamic, FormationMode::kLead,    FormationMode::kCompanion,
-        FormationMode::kRear,    FormationMode::kSandbox, FormationMode::kVanilla};
+    inline constexpr std::array<FormationMode, 7> OrderModes{
+        FormationMode::kDynamic, FormationMode::kLead,    FormationMode::kCompanion, FormationMode::kRear,
+        FormationMode::kSandbox, FormationMode::kVanilla, FormationMode::kCustom};
+    inline constexpr int orderCount = static_cast<int>(OrderModes.size());
     inline constexpr FormationMode OrderMode(int index)
     {
-        return OrderModes[std::clamp(index, 0, 5)];
+        return OrderModes[std::clamp(index, 0, orderCount - 1)];
     }
 
     inline int OrderSelection(int shortcut, int mouse, int focus, bool confirm)
     {
-        if (shortcut >= 0 && shortcut < 6) {
+        if (shortcut >= 0 && shortcut < orderCount) {
             return shortcut;
         }
-        if (mouse >= 0 && mouse < 6) {
+        if (mouse >= 0 && mouse < orderCount) {
             return mouse;
         }
-        return confirm ? std::clamp(focus, 0, 5) : -1;
+        return confirm ? std::clamp(focus, 0, orderCount - 1) : -1;
     }
     struct RegroupState
     {

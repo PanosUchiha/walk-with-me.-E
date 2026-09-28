@@ -3,6 +3,7 @@
 #include "tether_approach.h"
 #include "tether_clasp.h"
 #include "tether_contact.h"
+#include "tether_movement.h"
 #include "tether_session.h"
 #include <array>
 #include <iostream>
@@ -143,6 +144,161 @@ int main()
         check(s.Done(), "deferred cancelled attempt fully cleans up");
     }
 
+    // A lost package may need another offset without giving up the original
+    // cleanup obligation. Refresh callbacks use the same serial operation slot.
+    auto heldSession = [&] {
+        TetherSession held;
+        held.Start();
+        for (auto op : setup) {
+            finish(held, op);
+        }
+        return held;
+    };
+    TetherSession renewal;
+    check(!renewal.RefreshOffset(), "an inactive session cannot renew movement");
+    renewal.Start();
+    check(!renewal.RefreshOffset(), "acquisition cannot request a movement renewal");
+    for (auto op : {TetherOp::AddPlayer, TetherOp::AddFollower, TetherOp::Connect}) {
+        finish(renewal, op);
+    }
+    check(!renewal.RefreshOffset(), "connection alone cannot renew an offset never acquired");
+    finish(renewal, TetherOp::Offset);
+    check(renewal.RefreshOffset() && renewal.offset && renewal.Next() == TetherOp::Offset,
+          "renewal retains the live offset and schedules only another offset call");
+    check(!renewal.RefreshOffset(), "a queued renewal cannot be duplicated");
+    check(renewal.Begin(TetherOp::Offset) && !renewal.Next() && !renewal.RefreshOffset(),
+          "renewal occupies the serial callback slot");
+    check(renewal.Defer(TetherOp::Offset) && renewal.offset && renewal.refreshOffset && renewal.connected &&
+              renewal.Next() == TetherOp::Offset,
+          "deferred renewal preserves the grip and old offset until a fresh retry");
+    finish(renewal, TetherOp::Offset);
+    check(renewal.offset && renewal.connected && !renewal.refreshOffset && !renewal.Next(),
+          "successful renewal becomes quiet without rebuilding physics");
+    check(renewal.RefreshOffset(), "a later package change can request a fresh renewal");
+    finish(renewal, TetherOp::Offset, false);
+    check(renewal.cancelled && renewal.offset && renewal.Next() == TetherOp::Disconnect,
+          "failed renewal releases the grip while retaining offset cleanup ownership");
+    for (auto op : teardown) {
+        finish(renewal, op);
+    }
+    check(renewal.Done(), "failed renewal clears the original offset before returning movement");
+
+    for (int result : {0, 1, 2}) {
+        renewal = heldSession();
+        check(renewal.RefreshOffset() && renewal.Begin(TetherOp::Offset),
+              "cancellation scenario begins with an in-flight renewal");
+        renewal.Cancel();
+        check(!renewal.Next() && !renewal.RefreshOffset() && renewal.offset,
+              "release waits for the renewal result without dropping ownership");
+        check(!TetherStepCurrent(renewal, 12, 12, static_cast<int>(TetherOp::Offset)),
+              "cancelled renewal cannot perform a new queued engine mutation");
+        check(result == 2 ? renewal.Defer(TetherOp::Offset) : renewal.Complete(TetherOp::Offset, result == 1),
+              "late success, failure and no-mutation results all unblock cleanup");
+        check(!renewal.connected && renewal.offset && renewal.Next() == TetherOp::Disconnect,
+              "a late renewal never revives the grip or discards the old offset");
+        for (auto op : teardown) {
+            finish(renewal, op);
+        }
+        check(renewal.Done(), "cancelled renewal drains each acquired resource exactly once");
+    }
+    renewal = heldSession();
+    renewal.RefreshOffset();
+    renewal.Begin(TetherOp::Offset);
+    renewal.Defer(TetherOp::Offset);
+    renewal.Cancel();
+    for (auto op : teardown) {
+        finish(renewal, op);
+    }
+    check(renewal.Done(), "release between deferred renewal attempts never restarts movement");
+
+    constexpr float circle = 6.283185307F;
+    const auto nearYaw = [&](std::optional<float> actual, float expected) {
+        return actual && std::abs(std::remainder(*actual - expected, circle)) < .0001F;
+    };
+    check(nearYaw(TetherHeldHeading(1, 2, 1.0F / 60), 1.1F),
+          "held facing advances at the bounded rate on an ordinary frame");
+    check(nearYaw(TetherHeldHeading(1, 0, .5F), .7F),
+          "a slow frame cannot snap a live grip through a large angle");
+    check(nearYaw(TetherHeldHeading(6.25F, .04F, 1.0F / 60), .04F) &&
+              nearYaw(TetherHeldHeading(.03F, 6.24F, 1.0F / 60), 6.24F),
+          "held facing takes the short turn across zero in either direction");
+    check(nearYaw(TetherHeldHeading(1, 1.02F, .05F), 1.02F) && nearYaw(TetherHeldHeading(1, 1, .05F), 1),
+          "small and settled turns never overshoot the player's heading");
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float infinity = std::numeric_limits<float>::infinity();
+    for (float dt : {0.0F, -1.0F, 1.01F, nan, infinity}) {
+        check(!TetherHeldHeading(0, 1, dt), "invalid elapsed time cannot rotate the follower");
+    }
+    check(!TetherHeldHeading(nan, 0, .05F) && !TetherHeldHeading(0, infinity, .05F),
+          "invalid actor headings cannot enter a rotation update");
+
+    using MovementAction = TetherMovementAction;
+    TetherMovement motion;
+    motion.Requested(0);
+    check(motion.package && *motion.package == 0,
+          "a null current package is recorded separately from an unrequested offset");
+    check(motion.Observe(41, 0, 0, 0, .25F) == MovementAction::None &&
+              motion.Observe(41, 0, 0, 0, .25F) == MovementAction::RefreshPackage,
+          "a package appearing after null dispatch renews after the minimum spacing");
+    motion.Requested(41);
+    renewal = heldSession();
+    renewal.RefreshOffset();
+    renewal.Begin(TetherOp::Offset);
+    // The engine changes 41 -> 42 while the VM call for 41 is pending. The
+    // controller deliberately does not call Observe until that result arrives.
+    check(motion.package == 41 && renewal.pending == TetherOp::Offset,
+          "pending renewal keeps the dispatch package instead of adopting a later package");
+    renewal.Complete(TetherOp::Offset, true);
+    check(motion.Observe(42, 0, 0, 0, .5F) == MovementAction::RefreshPackage,
+          "a package change during the VM wait is still detected after completion");
+    motion.Requested(42);
+    check(motion.Observe(0, 0, 0, 0, .5F) == MovementAction::RefreshPackage,
+          "loss of a previously valid package also renews movement");
+    motion.Requested(0);
+    for (int frame = 0; frame < 120; ++frame) {
+        check(motion.Observe(0, 50, 0, 0, .05F) == MovementAction::None,
+              "unchanged null package and an idle pair do not repeatedly renew offset");
+    }
+
+    // Standing turns can move the side target without requiring locomotion.
+    // Ordinary walking and small arrival errors also must not look like a freeze.
+    for (const auto sample : std::array<std::array<float, 3>, 3>{{{60, 0, 0}, {60, 80, 70}, {10, 80, 0}}}) {
+        motion = {};
+        motion.Requested(41);
+        for (int frame = 0; frame < 100; ++frame) {
+            check(motion.Observe(41, sample[0], sample[1], sample[2], .05F) == MovementAction::None,
+                  "idle turns, normal walking and arrival tolerance never trigger stall recovery");
+        }
+    }
+    motion = {};
+    motion.Requested(41);
+    check(motion.Observe(41, 50, 80, 0, .5F) == MovementAction::None,
+          "initial movement grace cannot immediately classify a follower as frozen");
+    check(motion.Observe(41, 50, 80, 0, .125F) == MovementAction::RefreshStall,
+          "sustained player travel with a motionless displaced follower renews once");
+    motion.Requested(41);
+    check(motion.Observe(41, 50, 80, 0, .5F) == MovementAction::None &&
+              motion.Observe(41, 50, 80, 0, .5F) == MovementAction::None,
+          "stall repair allows the renewed movement time to take effect");
+    check(motion.Observe(41, 50, 80, 0, .5F) == MovementAction::Release,
+          "persistent freeze releases after one renewal instead of retrying forever");
+    check(motion.Observe(41, 50, 80, 20, .05F) == MovementAction::None && !motion.retriedStall,
+          "observed follower movement rearms recovery for a separate later stall");
+    check(motion.Observe(41, 50, 80, 0, .5F) == MovementAction::None,
+          "a later stall begins a new observation window");
+    motion.Pause();
+    check(motion.Observe(41, 50, 80, 0, .125F) == MovementAction::None,
+          "pause discards partial stalled time");
+    for (const auto sample : std::array<std::array<float, 4>, 5>{{{50, 80, 0, 0},
+                                                                  {50, 80, 0, 2},
+                                                                  {nan, 80, 0, .05F},
+                                                                  {50, infinity, 0, .05F},
+                                                                  {50, 80, nan, .05F}}}) {
+        check(motion.Observe(41, sample[0], sample[1], sample[2], sample[3]) == MovementAction::None &&
+                  motion.stalled == 0,
+              "invalid movement samples clear accumulated stall time without action");
+    }
+
     TetherHandoff h;
     // Reproduce Rumarin's delayed alias sweep. Grip setup must neither wait for
     // its acknowledgement nor send him back to an ordinary formation target.
@@ -158,13 +314,14 @@ int main()
     check(s.connected && s.constraint && !s.offset && s.Next() == TetherOp::Offset,
           "hands are connected before any movement handoff");
     h.Start(42, 8);
-    check(!TetherRetainsApproach(s, h) && NeedsHandoff(*s.Next()),
-          "connected grip requests handoff but cannot race the old offset cleanup");
+    check(TetherRetainsApproach(s, h) && NeedsHandoff(*s.Next()),
+          "connected handoff retains approach travel while offset waits for old cleanup");
     for (int frame = 0; frame < 180; ++frame) {
         check(s.connected && !h.ready && s.Next() == TetherOp::Offset,
               "a three-second alias delay does not delay or drop the existing grip");
     }
     s.Cancel();
+    check(!TetherRetainsApproach(s, h), "cancellation ends approach even before handoff cleanup arrives");
     for (auto op : {TetherOp::Disconnect, TetherOp::RemoveFollower, TetherOp::RemovePlayer}) {
         finish(s, op);
     }
@@ -354,6 +511,173 @@ int main()
         check(!RepathArrivalHold(route, arrived) && !route.ShouldRepath(arrived, 0, false, true, close),
               "holding arrival does not repeatedly restart pathfinding during a delayed VM callback");
     }
+
+    // The bridge can only advance a route still owned by this follower's slot.
+    // Empty or reassigned aliases and foreign packages must never be reclaimed.
+    struct TravelOwnership
+    {
+        bool requested, travelActive;
+        std::uint32_t aliasActor, currentPackage;
+        bool allowed;
+    };
+    constexpr std::uint32_t followerID = 42, slotPackage = 71;
+    constexpr std::array ownershipCases{TravelOwnership{true, true, followerID, slotPackage, true},
+                                        TravelOwnership{false, true, followerID, slotPackage, false},
+                                        TravelOwnership{true, false, followerID, slotPackage, false},
+                                        TravelOwnership{true, true, 0, slotPackage, false},
+                                        TravelOwnership{true, true, 43, slotPackage, false},
+                                        TravelOwnership{true, true, followerID, 0, false},
+                                        TravelOwnership{true, true, followerID, 72, false},
+                                        TravelOwnership{true, false, 0, 0, false}};
+    for (const auto ownership : ownershipCases) {
+        check(ContinueHandoffTravel(ownership.requested, ownership.travelActive,
+                                    ownership.aliasActor == followerID,
+                                    ownership.currentPackage == slotPackage) == ownership.allowed,
+              "handoff travel requires the existing route, matching alias and matching package");
+    }
+
+    TravelGoalState bridgeRoute;
+    bridgeRoute.Commit({40, -10}, {40, -10}, TravelPace::kWalk);
+    bridgeRoute.MarkRepathed();
+    bridgeRoute.sinceRepath = .149F;
+    check(!RepathHandoffTravel(bridgeRoute, {48, -10}),
+          "moving handoff target waits for the minimum repath interval");
+    bridgeRoute.sinceRepath = .15F;
+    check(!RepathHandoffTravel(bridgeRoute, {47.999F, -10}) && RepathHandoffTravel(bridgeRoute, {48, -10}),
+          "handoff repath starts at eight units and the minimum cadence");
+    check(RepathHandoffTravel(bridgeRoute, {40, -18}), "handoff measures target motion in either direction");
+    bridgeRoute.recoveryTime = .01F;
+    check(!RepathHandoffTravel(bridgeRoute, {140, -10}), "navigation recovery blocks handoff repathing");
+    bridgeRoute.recoveryTime = 0;
+    bridgeRoute.active = false;
+    check(!RepathHandoffTravel(bridgeRoute, {140, -10}),
+          "handoff repathing cannot reactivate a released route");
+    bridgeRoute.active = true;
+    bridgeRoute.hasRoute = false;
+    bridgeRoute.sinceRepath = .149F;
+    check(!RepathHandoffTravel(bridgeRoute, {40, -10}),
+          "a missing submitted route still respects handoff cadence");
+    bridgeRoute.sinceRepath = .15F;
+    check(RepathHandoffTravel(bridgeRoute, {40, -10}),
+          "an active route can submit its first handoff destination");
+    bridgeRoute.MarkRepathed();
+    for (int frame = 0; frame < 120; ++frame) {
+        bridgeRoute.Tick({40, -10}, 1.0F / 60, true, close);
+        check(!RepathHandoffTravel(bridgeRoute, {40, -10}),
+              "a stationary connected pair never restarts its arrival route");
+    }
+
+    // Inigo's alias cleanup can take about two seconds after Connect succeeds.
+    // Keep the slot's moving marker alive during that VM delay without admitting
+    // Offset, which would race the script's pending ClearKeepOffsetFromActor.
+    TetherSession bridgeSession;
+    TetherHandoff bridgeHandoff;
+    bridgeSession.Start();
+    for (auto op : {TetherOp::AddPlayer, TetherOp::AddFollower, TetherOp::Connect}) {
+        finish(bridgeSession, op);
+    }
+    ArrivalRadiusLease bridgeRadiusLease;
+    std::uint32_t bridgeRadius = 65;
+    bridgeRadiusLease.Update(bridgeRadius, true);
+    bridgeHandoff.Start(followerID, 10);
+    auto acquiredOffset = heldSession();
+    check(!TetherRetainsApproach(acquiredOffset, bridgeHandoff),
+          "an already acquired offset cannot retain the old approach route");
+    TetherSession unconnectedBridge;
+    unconnectedBridge.Start();
+    check(!TetherRetainsApproach(unconnectedBridge, bridgeHandoff),
+          "a handoff request without a connected grip cannot resume travel");
+    bridgeRoute = {};
+    bridgeRoute.Commit({40, -10}, {40, -10}, TravelPace::kWalk);
+    bridgeRoute.MarkRepathed();
+    bool travelActive = true;
+    Vec2 marker = bridgeRoute.submittedGoal;
+    int markerMoves = 0, firstMarkerMove = 0;
+    for (int frame = 1; frame <= 120; ++frame) {
+        const auto target = ApproachPoint({0, frame * 1.2F}, 0, 1);
+        bridgeRoute.Tick(marker, 1.0F / 60, true, close);
+        const bool requested = TetherRetainsApproach(bridgeSession, bridgeHandoff);
+        check(ContinueHandoffTravel(requested, travelActive, true, true),
+              "the connected follower retains its owned route throughout the alias delay");
+        bridgeRadiusLease.Update(bridgeRadius, requested);
+        check(bridgeRadius == approachRadius && bridgeRadiusLease.original == 65,
+              "handoff continuation preserves the original arrival-radius lease");
+        if (RepathHandoffTravel(bridgeRoute, target)) {
+            check(target.y > marker.y, "the handoff marker advances with player travel");
+            marker = target;
+            bridgeRoute.Commit(target, marker, TravelPace::kWalk);
+            bridgeRoute.MarkRepathed();
+            ++markerMoves;
+            if (!firstMarkerMove) {
+                firstMarkerMove = frame;
+            }
+        }
+        check(bridgeSession.connected && bridgeSession.constraint && bridgeSession.player &&
+                  bridgeSession.follower && !bridgeSession.offset && !bridgeSession.pending,
+              "native travel during handoff preserves connected physics without offset mutation");
+        check(bridgeSession.Next() == TetherOp::Offset && NeedsHandoff(*bridgeSession.Next()) &&
+                  !bridgeHandoff.ready,
+              "every pre-acknowledgement frame leaves Offset blocked by the handoff gate");
+    }
+    check(firstMarkerMove > 0 && firstMarkerMove <= 10 && markerMoves >= 12 && marker.y >= 122,
+          "the two-second handoff begins following within one cadence and continues advancing");
+
+    const Vec2 releasedMarker = marker;
+    check(TetherRetainsApproach(bridgeSession, bridgeHandoff) &&
+              !ContinueHandoffTravel(true, travelActive, false, true),
+          "alias clearing stops the old route even before cleanup acknowledgement");
+    bridgeRoute.Release();
+    travelActive = false;
+    bridgeRadiusLease.Update(bridgeRadius, false);
+    check(bridgeRadius == 65 && !bridgeRadiusLease.original,
+          "releasing the handoff route restores its pre-approach arrival radius");
+    for (int frame = 0; frame < 12; ++frame) {
+        bridgeRoute.Tick(marker, 1.0F / 60, false, close);
+        check(!ContinueHandoffTravel(true, travelActive, false, true) &&
+                  !ContinueHandoffTravel(true, travelActive, true, true) &&
+                  !RepathHandoffTravel(bridgeRoute, {40, 200}),
+              "an empty or later refilled alias cannot reclaim a released handoff route");
+        check(marker.x == releasedMarker.x && marker.y == releasedMarker.y && !bridgeSession.offset,
+              "the released marker stays fixed while the VM finishes old offset cleanup");
+    }
+    check(!bridgeHandoff.Confirm(followerID, 10, true, true),
+          "alias and package release alone cannot bypass the old offset cleanup callback");
+    check(bridgeHandoff.RecordCleanup(followerID, 10, true) &&
+              !TetherRetainsApproach(bridgeSession, bridgeHandoff),
+          "cleanup acknowledgement ends approach retention before offset takes ownership");
+    check(!bridgeHandoff.Confirm(followerID, 10, true, false) && !bridgeHandoff.ready &&
+              bridgeSession.connected && !bridgeSession.offset,
+          "a delayed package release keeps offset blocked after script cleanup");
+    check(bridgeHandoff.Confirm(followerID, 10, true, true),
+          "completed alias cleanup and package release admit the first offset");
+    check(bridgeSession.Begin(TetherOp::Offset) && !bridgeSession.Next() &&
+              !bridgeSession.Begin(TetherOp::Offset),
+          "post-handoff Offset still uses exactly one serial callback slot");
+    check(bridgeSession.Complete(TetherOp::Offset, true) && bridgeSession.offset && bridgeSession.connected &&
+              !bridgeSession.Next() && !TetherRetainsApproach(bridgeSession, bridgeHandoff),
+          "completed handoff settles into normal connected offset movement");
+
+    TetherSession cancelledBridge;
+    TetherHandoff cancelledHandoff;
+    cancelledBridge.Start();
+    for (auto op : {TetherOp::AddPlayer, TetherOp::AddFollower, TetherOp::Connect}) {
+        finish(cancelledBridge, op);
+    }
+    cancelledHandoff.Start(followerID, 11);
+    cancelledBridge.Cancel();
+    check(!TetherRetainsApproach(cancelledBridge, cancelledHandoff) &&
+              !ContinueHandoffTravel(TetherRetainsApproach(cancelledBridge, cancelledHandoff), true, true,
+                                     true),
+          "cancellation stops handoff travel even while the old slot still owns the actor");
+    check(cancelledHandoff.RecordCleanup(followerID, 11, true) &&
+              cancelledHandoff.Confirm(followerID, 11, true, true) &&
+              cancelledBridge.Next() == TetherOp::Disconnect && !cancelledBridge.Begin(TetherOp::Offset),
+          "late cleanup acknowledgement cannot restart a cancelled handoff");
+    for (auto op : {TetherOp::Disconnect, TetherOp::RemoveFollower, TetherOp::RemovePlayer}) {
+        finish(cancelledBridge, op);
+    }
+    check(cancelledBridge.Done(), "cancelled handoff drains physics without taking an offset");
+
     ArrivalRadiusLease radiusLease;
     std::uint32_t radius = 65;
     check(radiusLease.Update(radius, true) && radius == 12,

@@ -1,4 +1,5 @@
 #pragma once
+#include "alias_sync.h"
 #include "party_life.h"
 #include "party_orders.h"
 #include "rest_recovery.h"
@@ -11,6 +12,7 @@
 #include "loot_scout.h"
 #include "menu_ui.h"
 #include "party_recall.h"
+#include "pathfinder.h"
 #include "area_activities.h"
 #include "rest_activities.h"
 #include "rest_pose.h"
@@ -32,6 +34,11 @@ namespace Wayfarer
         void Initialize();
         void Update(float a_deltaSeconds);
         void UpdateHandHolding(float dt);
+        void UpdateAliasSync(float dt);
+        bool AliasSyncAllowed(std::int32_t ticket, std::int32_t session);
+        void ReportAliasLook(std::int32_t slot, RE::Actor* actor, RE::Actor* target, std::int32_t ticket,
+                             std::int32_t session);
+        void ReportAliasCleanup(std::int32_t slot, bool pending, std::int32_t ticket, std::int32_t session);
         std::int32_t GetTetherHandoffTicket(std::uint32_t slot);
         RE::BGSRefAlias* GetTetherHandoffAlias(std::uint32_t slot, std::int32_t ticket);
         void ConfirmTetherHandoff(std::uint32_t slot, std::int32_t ticket);
@@ -54,6 +61,8 @@ namespace Wayfarer
             float elapsed{};
         };
         [[nodiscard]] std::vector<LootScoutView> LootScouts() const;
+        // Companions out on a pathfinding trip, from the sighting until they rejoin.
+        [[nodiscard]] std::vector<LootScoutView> Pathfinders() const;
         [[nodiscard]] std::vector<CommandGesture::FollowerBearing> GestureFollowerBearings(
             RE::PlayerCharacter& player);
         static void RegisterSerialization();
@@ -67,6 +76,10 @@ namespace Wayfarer
         void SetDialogueManagement(RE::Actor* actor, bool add);
         void SetPackageControl(RE::FormID id, bool take, std::uint64_t expectedGeneration);
         void RequestPartyRecall(std::uint64_t expectedGeneration);
+        // NFF's catch-up timer goes back to the player's value before a save and while the journal
+        // (NFF's menu) is open; the next update parks it again if Walk With Me still teleports.
+        void ReleaseFrameworkCatchup(const char* reason);
+        void RestartFrameworkCatchupAfterLoad();
         void RequestCompanionPush(RE::FormID id, std::uint64_t expectedGeneration);
         bool ConsumeCompanionPush(RE::Actor* actor, std::int32_t ticket);
         void ToggleTemporaryRelaxation(std::uint64_t expectedGeneration);
@@ -103,6 +116,11 @@ namespace Wayfarer
         const char* PackageControlLoss(RE::Actor& actor, std::uint32_t flags) const;
         const char* PackageControlStartRejection(RE::Actor& actor) const;
         void UpdatePackageControl();
+        // Imports whose recruitment signal is currently lost, and since when. Paused, not ended.
+        [[nodiscard]] bool PackageControlSuspended(RE::FormID id) const;
+        std::unordered_map<RE::FormID, std::uint64_t> packageLossSince;
+        std::unordered_set<RE::FormID> packageSeenFollowing;
+        const char* ImportCompanion(RE::Actor& actor);
         std::unordered_map<RE::FormID, std::uint32_t> packageRegistrations;
         std::unordered_set<RE::FormID> dialogueRegistrations;
         float dialogueRosterTimer{};
@@ -174,6 +192,13 @@ namespace Wayfarer
             float scoutCooldown{}, scoutInspect{}, scoutIdleGap{};
             bool scoutParked{}, scoutSawIdle{};
             int scoutRetries{};
+            // Pathfinder: running ahead to point out an undiscovered place.
+            Pathfinder::State pathfinder;
+            RE::NiPoint3 pathfinderPlace{}; // The map marker being pointed out.
+            RE::NiPoint3 pathfinderGoal{};  // Where they run to, then where they stand.
+            RE::NiPoint3 pathfinderFrom{};  // Where the player stood when that was chosen.
+            RE::ObjectRefHandle pathfinderRef; // Its map marker, to notice the player finding it.
+            const char* pathfinderNoun{"something"};
         };
 
         FormationController() = default;
@@ -229,11 +254,22 @@ namespace Wayfarer
         void UpdateBanterMotion(RE::PlayerCharacter& player);
         [[nodiscard]] bool LootScoutPermitted() const;
         [[nodiscard]] bool HasLootScouts() const;
+        [[nodiscard]] bool HasPathfinder() const;
         void UpdateLootScouts(RE::PlayerCharacter& player, float dt);
         void StartLootScout(RE::PlayerCharacter& player);
         bool DriveLootScout(ManagedFollower& follower, RE::Actor& actor, RE::PlayerCharacter& player,
                             bool retarget);
         void EndLootScout(ManagedFollower& follower, RE::Actor* actor, Loot::End reason);
+        void UpdatePathfinder(RE::PlayerCharacter& player, float dt);
+        void StartPathfinder(RE::PlayerCharacter& player);
+        void EndPathfinder(ManagedFollower& follower, RE::Actor* actor, Pathfinder::End reason);
+        [[nodiscard]] const char* PathfinderRejection(RE::PlayerCharacter& player) const;
+        void NotePathfinder(std::string key, std::string detail);
+        [[nodiscard]] std::optional<RE::NiPoint3> PathfinderGround(RE::PlayerCharacter& player,
+                                                                   RE::NiPoint3 place) const;
+        std::unordered_set<RE::FormID> pathfinderSeen; // Places already pointed out this session.
+        float pathfinderScan{}, pathfinderCooldown{}, pathfinderNoteAge{};
+        std::string pathfinderNoteKey, pathfinderNote; // Why the last scans pointed nothing out.
         void ForgetLootArea();
         std::unordered_set<RE::FormID> lootSeen;
         std::unordered_map<RE::FormID, float> lootBackoff;
@@ -253,6 +289,8 @@ namespace Wayfarer
         std::vector<RE::Actor*> RecallCandidates() const;
         const char* RecallPlayerRejection(RE::PlayerCharacter& player) const;
         const char* RecallActorRejection(RE::Actor& actor, bool automatic) const;
+        const char* RecallStateRejection(RE::Actor& actor, bool automatic) const;
+        [[nodiscard]] bool IsTravelCompanion(RE::Actor& actor) const;
         void RecallParty(RE::PlayerCharacter& player);
         struct Landing
         {
@@ -272,6 +310,12 @@ namespace Wayfarer
         std::unordered_map<RE::FormID, std::string> catchupHolds;
         PlayerTrail playerTrail;
         float catchupTimer{};
+        // Whether Walk With Me is doing Nether's Follower Framework's teleporting (see
+        // FrameworkWarpPark); decided each update, applied to NFF's nwsWarpStart global.
+        void UpdateFrameworkCatchup();
+        [[nodiscard]] bool HoldingRelaxCamp() const;
+        FrameworkWarpPark frameworkWarp;
+        bool frameworkCatchup{};
         PartyRecallRequest recallRequest;
         CompanionPushRequest companionPush;
         const char* CompanionPushRejection(RE::Actor& actor) const;
@@ -307,7 +351,7 @@ namespace Wayfarer
         void UpdateSocial(float dt);
         [[nodiscard]] RE::TESObjectREFR* EnsureMarker(ManagedFollower& a_follower, RE::Actor& a_anchor);
         [[nodiscard]] RE::TESQuest* EnsureQuest();
-        void WakeQuest();
+        void CompleteAliasSync(std::uint64_t ticket, std::int32_t session, bool completed);
         [[nodiscard]] static RE::BGSRefAlias* GetRefAlias(RE::TESQuest* a_quest, std::uint32_t a_aliasID);
         void ReleaseTravel(ManagedFollower& a_follower, RE::Actor* a_actor, bool tetherHandoff = false);
         void ReleaseAll(bool keepLootScouts = false);
@@ -380,6 +424,7 @@ namespace Wayfarer
         float scanTimer{0.0F};
         float updateTimer{0.0F};
         float roleTimer{1.0F}, roleCooldown{};
+        RoleDebounce roleDebounce; // A new role assignment must hold before anyone moves.
         struct BanterSceneLease
         {
             RE::BGSScene* scene{};
@@ -397,7 +442,13 @@ namespace Wayfarer
         float handsBackCooldown{45.0F};
         float activityDispatchCooldown{};
         float traceTimer{0.0F};
-        float wakeTimer{2.0F};
+        AliasSyncQueue aliasSyncQueue;
+        std::array<std::uint32_t, PARTY_CAPACITY> aliasLookActors{}, aliasLookTargets{};
+        std::array<bool, PARTY_CAPACITY> aliasCleanupPending{};
+        float aliasSyncTimer{0.25F};
+        float aliasSyncRetryDelay{0.25F};
+        std::int32_t aliasSyncTicket{};
+        std::int32_t aliasSyncSession{static_cast<std::int32_t>(GetTickCount64() ^ GetCurrentProcessId())};
         float loadReleaseTime{};
         bool traceDue{false};
         bool enabled{true};

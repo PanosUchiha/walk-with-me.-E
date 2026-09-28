@@ -1,5 +1,7 @@
 #include "order_visuals.h"
+#include "custom_formation.h"
 #include "order_wheel.h"
+#include <atomic>
 namespace Wayfarer::OrderVisuals
 {
     namespace
@@ -19,18 +21,24 @@ namespace Wayfarer::OrderVisuals
             Ember,
             Teleport,
             ChatBubble,
-            LootChest
+            LootChest,
+            Scout
         };
         constexpr Im::ImU32 ivory = IM_COL32(226, 218, 201, 255);
+        Im::ImU32 iconTint = ivory; // Set by Icon() for its layers; 0 below means "use it".
+        std::atomic<int> customEmblem{Custom::defaultEmblem};
         void Layer(Im::ImDrawList* draw, V center, float size, Asset asset, float alpha, float dx = 0,
                    float dy = 0, float rotation = 0, float sx = 1, float sy = 1, V uv0 = {0, 0},
-                   V uv1 = {1, 1}, Im::ImU32 tint = ivory)
+                   V uv1 = {1, 1}, Im::ImU32 tint = 0)
         {
+            if (!tint) {
+                tint = iconTint;
+            }
             static const auto textures = [] {
-                std::array<Im::ImTextureID, 11> value{};
-                constexpr const char* names[]{"natural", "arrow", "wing-a",   "wing-b", "shield", "logs",
-                                              "flame",   "ember", "teleport", "chat",   "loot"};
-                for (int i = 0; i < 11; ++i) {
+                std::array<Im::ImTextureID, 12> value{};
+                constexpr const char* names[]{"natural", "arrow", "wing-a", "wing-b", "shield", "logs",
+                                              "flame",   "ember", "teleport", "chat", "loot",  "pathfinder"};
+                for (int i = 0; i < 12; ++i) {
                     value[i] = SKSEMenuFramework::LoadTexture(
                         std::string("Data/Interface/WalkWithMe/") + names[i] + ".svg", {256, 256});
                 }
@@ -64,6 +72,13 @@ namespace Wayfarer::OrderVisuals
         Layer(draw, center, size, LootChest, alpha, 0, 0, 0, 1, 1, {0, 0}, {1, 1},
               valuable ? IM_COL32(240, 192, 72, 255) : IM_COL32(250, 248, 242, 255));
     }
+    void PathfinderEmblem(Im::ImDrawList* draw, V center, float size, float alpha)
+    {
+        // Drawn like the loot chest: the same shadow under the same near-white.
+        Layer(draw, center, size * 1.08F, Scout, alpha * .45F, 0, .03F, 0, 1, 1, {0, 0}, {1, 1},
+              IM_COL32(0, 0, 0, 255));
+        Layer(draw, center, size, Scout, alpha, 0, 0, 0, 1, 1, {0, 0}, {1, 1}, IM_COL32(250, 248, 242, 255));
+    }
     void Sector(Im::ImDrawList* draw, V center, float radius, int mode, Im::ImU32 color)
     {
         static const auto texture =
@@ -81,14 +96,33 @@ namespace Wayfarer::OrderVisuals
         D::AddImageQuad(draw, texture, point(0, 0), point(1, 0), point(1, 1), point(0, 1), {0, 0}, {1, 0},
                         {1, 1}, {0, 1}, color);
     }
-    void Icon(Im::ImDrawList* draw, V p, float size, int mode, float elapsed, float alpha, bool bare)
+    void Icon(Im::ImDrawList* draw, V p, float size, int mode, float elapsed, float alpha, bool bare,
+              Im::ImU32 tint)
     {
+        struct Tint
+        {
+            explicit Tint(Im::ImU32 value) { iconTint = value; }
+            ~Tint() { iconTint = ivory; }
+        } scope(tint);
         const float t = std::max(0.0F, elapsed);
         auto pulse = [](float t, float duration) {
             return t >= duration ? 0.0F : std::sin(Wheel::pi * std::clamp(t / duration, 0.0F, 1.0F));
         };
         switch (mode) {
         case 6: {
+            // The player's own formation wears the emblem they chose; it lifts and settles on focus.
+            const float q = 1 - Wheel::EaseOut(t / .45F);
+            Crest(draw, {p.x, p.y - size * .05F * q}, size * (.84F + .05F * q), customEmblem.load(), alpha,
+                  iconTint);
+            break;
+        }
+        case 9: {
+            // Pathfinder's scout strides: a few steps' bob, then still.
+            const float q = t < 1.2F ? std::abs(std::sin(t * 7.5F)) * (1 - t / 1.2F) : 0;
+            Layer(draw, p, size * .9F, Scout, alpha, .015F * q, -.03F * q);
+            break;
+        }
+        case 8: {
             const float q = std::sin(t * 2.4F);
             Layer(draw, p, size * .92F, Teleport, alpha * (.93F + .07F * q), 0, -.014F * q, 0, 1,
                   1 + .025F * q);
@@ -156,5 +190,82 @@ namespace Wayfarer::OrderVisuals
             break;
         }
         }
+    }
+
+    void DrawGlyph(Im::ImDrawList* draw, V p, float size, Glyph glyph, float elapsed, Im::ImU32 color)
+    {
+        const float t = std::max(0.0F, elapsed);
+        const float stroke = std::max(1.5F, size * .07F);
+        auto at = [&](float x, float y) { return V{p.x + x * size, p.y + y * size}; };
+        switch (glyph) {
+        case Glyph::Target: {
+            // The sighting ring turns into place on focus, a quarter of a turn.
+            const float spin = (1 - Wheel::EaseOut(t / .6F)) * Wheel::pi / 4;
+            for (int i = 0; i < 4; ++i) {
+                const float mid = spin + Wheel::pi / 4 + i * Wheel::pi / 2;
+                D::PathArcTo(draw, p, size * .40F, mid - .52F, mid + .52F, 12);
+                D::PathStroke(draw, color, 0, stroke);
+                const float tick = spin + i * Wheel::pi / 2;
+                D::AddLine(draw, at(std::cos(tick) * .33F, std::sin(tick) * .33F),
+                           at(std::cos(tick) * .49F, std::sin(tick) * .49F), color, stroke);
+            }
+            D::AddCircleFilled(draw, at(0, -.10F), size * .10F, color, 24);
+            D::PathArcTo(draw, at(0, .215F), size * .185F, Wheel::pi, 2 * Wheel::pi, 20);
+            D::PathFillConvex(draw, color);
+            break;
+        }
+        case Glyph::Link: {
+            // Two rings slide together and interlock: each dips under the other once.
+            const float r = .22F, d = .14F + .10F * (1 - Wheel::EaseOut(t / .5F));
+            for (int side = -1; side <= 1; side += 2) {
+                const V c = at(side * d, 0);
+                if (d >= r) {
+                    D::AddCircle(draw, c, size * r, color, 40, stroke);
+                    continue;
+                }
+                // Where this ring meets the other: the left ring passes under at the bottom
+                // crossing, the right one under at the top.
+                const float y = std::sqrt(r * r - d * d) * (side < 0 ? 1.0F : -1.0F);
+                const float gap = std::atan2(y, static_cast<float>(-side) * d);
+                D::PathArcTo(draw, c, size * r, gap + .30F, gap + 2 * Wheel::pi - .30F, 40);
+                D::PathStroke(draw, color, 0, stroke);
+            }
+            break;
+        }
+        case Glyph::Power: {
+            // The ring draws itself in on focus.
+            const float start = -Wheel::pi / 2 + .62F, full = 2 * Wheel::pi - 1.24F;
+            D::PathArcTo(draw, p, size * .30F, start, start + full * (.2F + .8F * Wheel::EaseOut(t / .5F)), 36);
+            D::PathStroke(draw, color, 0, stroke);
+            D::AddLine(draw, at(0, -.42F), at(0, -.06F), color, stroke);
+            break;
+        }
+        }
+    }
+
+    void SetCustomEmblem(int index)
+    {
+        customEmblem = std::clamp(index, 0, Custom::emblemCount - 1);
+    }
+
+    void Crest(Im::ImDrawList* draw, V center, float size, int index, float alpha, Im::ImU32 tint)
+    {
+        static const auto textures = [] {
+            std::array<Im::ImTextureID, Custom::emblemCount> value{};
+            for (int i = 0; i < Custom::emblemCount; ++i) {
+                value[i] = SKSEMenuFramework::LoadTexture(
+                    std::string("Data/Interface/WalkWithMe/crest-") + Custom::emblems[i].key + ".svg", {256, 256});
+            }
+            return value;
+        }();
+        const auto texture = textures[std::clamp(index, 0, Custom::emblemCount - 1)];
+        if (!texture || alpha <= 0) {
+            return;
+        }
+        const float h = size * .5F;
+        const auto opacity = static_cast<Im::ImU32>(255 * std::clamp(alpha, 0.0F, 1.0F));
+        D::AddImageQuad(draw, texture, {center.x - h, center.y - h}, {center.x + h, center.y - h},
+                        {center.x + h, center.y + h}, {center.x - h, center.y + h}, {0, 0}, {1, 0}, {1, 1}, {0, 1},
+                        (tint & ~IM_COL32_A_MASK) | (opacity << IM_COL32_A_SHIFT));
     }
 } // namespace Wayfarer::OrderVisuals

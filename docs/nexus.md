@@ -29,7 +29,7 @@ when using MO2; deploy mods before running it with Vortex.
 Third-person clips are in the add-on; FPI's first-person clips are separate.
 Gesture Animation Remix is not needed.
 
-Open Animation Replacer is also needed for locally generated TETHER clasp poses.
+Open Animation Replacer is also needed for the TETHER clasp poses, which are included.
 The base follower features do not require a
 behavior generator.
 
@@ -44,10 +44,9 @@ It does not fix missing WWM conditions. `requiredPlugin: "Walk With Me"` is corr
 it identifies the SKSE condition provider, not the ESP filename.
 
 Hand holding is experimental and off by default. Classic is the default method
-and needs no generated clips. The optional TETHER method uses a physics grip and
-OAR clasp poses generated from your own Skyrim files using HAND_HOLDING.md.
-The public archive includes the generator; the gesture add-on does not contain
-clasp clips. Post-victory reactions are shelved in 0.2.2.
+and needs no clasp clips. The optional TETHER method uses a physics grip and OAR
+clasp poses, both included in the main download (not the gesture add-on). If you
+generated clasp clips for an earlier version, remove that mod. Post-victory reactions are shelved in 0.2.2.
 
 ## Credits
 

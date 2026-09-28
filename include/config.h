@@ -2,6 +2,8 @@
 
 #include "hand_hold_state.h"
 #include "key_chord.h"
+#include "custom_formation.h"
+#include "pathfinder.h"
 #include "loot_scout_policy.h"
 #include "party_behavior.h"
 #include "travel_planner.h"
@@ -55,9 +57,16 @@ namespace Wayfarer
             return value;
         }();
         Loot::Tuning loot;
+        Custom::Formation customFormation;
         float distantCatchupStart{900};
         float distantCatchupEnd{500};
         bool teleportCatchup{true};
+        // A Relax order keeps its camp: nobody teleports those companions, NFF included.
+        bool holdRelaxing{true};
+        // While Walk With Me teleports, it also does NFF's catch-up and parks NFF's own timer.
+        bool replaceFrameworkCatchup{true};
+        // A companion who spots an undiscovered place runs ahead, waves and points it out.
+        Pathfinder::Tuning pathfinder;
         bool forwardCollision{true};
         float teleportDistance{4000};
         int maxFollowers{PARTY_CAPACITY};
@@ -72,6 +81,8 @@ namespace Wayfarer
         std::uint32_t scoutKey{0xFFFFFFFF};
         std::uint32_t rearKey{0xFFFFFFFF};
         std::uint32_t roamKey{0xFFFFFFFF};
+        std::uint32_t handHoldKey{0xFFFFFFFF};
+        std::uint32_t handHoldModifiers{};
         std::uint32_t toggleModifiers{}, cycleModeModifiers{}, reloadModifiers{};
         std::uint32_t commandModifiers{}, scoutModifiers{}, rearModifiers{}, roamModifiers{};
         float updateInterval{0.15F};
@@ -99,7 +110,9 @@ namespace Wayfarer
         }
     };
 
-    inline constexpr std::array<HotkeyBinding, 8> hotkeyBindings{
+    // Row indices are the action IDs dispatched by the menu's input handler.
+    inline constexpr std::size_t companionHotkeyRow = 7, handHoldHotkeyRow = 8;
+    inline constexpr std::array<HotkeyBinding, 9> hotkeyBindings{
         {{"Party orders", &SettingsData::commandKey, &SettingsData::commandModifiers, "iCommandKey",
           "iCommandModifiers"},
          {"Enable / disable", &SettingsData::toggleKey, &SettingsData::toggleModifiers, "iToggleKey",
@@ -112,7 +125,9 @@ namespace Wayfarer
          {"Reload INI", &SettingsData::reloadKey, &SettingsData::reloadModifiers, "iReloadKey",
           "iReloadModifiers"},
          {"Companion control", &SettingsData::companionKey, &SettingsData::companionModifiers,
-          "iCompanionKey", "iCompanionModifiers"}}};
+          "iCompanionKey", "iCompanionModifiers"},
+         {"Hold hands", &SettingsData::handHoldKey, &SettingsData::handHoldModifiers, "iHandHoldKey",
+          "iHandHoldModifiers"}}};
 
     inline void RebindHotkey(SettingsData& settings, std::size_t row, Hotkeys::Chord chord)
     {

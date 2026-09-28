@@ -114,7 +114,8 @@ namespace Wayfarer::CommandGesture
         }
         const auto& settings = Settings::GetSingleton().Get();
         if (settings.enabled && settings.commandGestures && !playback.owned && cooldown <= 0) {
-            requestedMode = static_cast<int>(mode);
+            // A custom formation is signalled like Natural: form up around me.
+            requestedMode = mode == FormationMode::kCustom ? 0 : static_cast<int>(mode);
             requestedGesture = ForMode(requestedMode);
             pending = true;
             wait = 0;

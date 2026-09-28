@@ -103,6 +103,10 @@ int main()
     SettingsData legacy;
     LoadHotkeys(old, legacy);
     check(legacy.companionKey == unbound, "New companion default does not steal an existing G binding");
+    check(SettingsData{}.handHoldKey == unbound && legacy.handHoldKey == unbound &&
+              std::string_view{hotkeyBindings[handHoldHotkeyRow].label} == "Hold hands" &&
+              std::string_view{hotkeyBindings[companionHotkeyRow].iniKey} == "iCompanionKey",
+          "Hold hands ships unbound and the named rows match their actions");
     check(legacy.commandKey == g && legacy.scoutKey == unbound && legacy.toggleKey == 0x44 &&
               legacy.reloadKey == 0x58,
           "old INI preserves customized keys, unbound entries and shipped defaults");

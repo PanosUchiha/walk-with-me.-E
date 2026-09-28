@@ -12,7 +12,8 @@ namespace Wayfarer
         kCompanion = 2,
         kRear = 3,
         kSandbox = 4,
-        kVanilla = 5
+        kVanilla = 5,
+        kCustom = 6 // The player's own formation, drawn in the formation editor.
     };
 
     struct Vec2
@@ -25,6 +26,7 @@ namespace Wayfarer
     {
         float lateral{0.0F};
         float longitudinal{0.0F};
+        bool operator==(const FormationSlot&) const = default;
     };
 
     [[nodiscard]] float Length(Vec2 a_value) noexcept;

@@ -13,12 +13,14 @@ int main()
             std::cerr << what << '\n';
         }
     };
+    // Seven wedges, clockwise from the top: Lead, Companion, Rear, Custom, Vanilla, Relax, Natural.
     check(Wheel::Direction(0, -1) == 1, "up = Lead");
-    check(Wheel::Direction(1, 0) == 2, "right = Companion");
-    check(Wheel::Direction(.7F, .7F) == 3, "bottom right = Rear");
-    check(Wheel::Direction(-.7F, .7F) == 4, "bottom left = Relax");
-    check(Wheel::Direction(-1, 0) == 0, "left = Natural");
-    check(Wheel::Direction(0, 1) == 5, "down = Vanilla");
+    check(Wheel::Direction(.78F, -.62F) == 2, "upper right = Companion");
+    check(Wheel::Direction(1, .2F) == 3, "right = Rear");
+    check(Wheel::Direction(.45F, .9F) == 6, "lower right = Custom");
+    check(Wheel::Direction(-.45F, .9F) == 5, "lower left = Vanilla");
+    check(Wheel::Direction(-1, .2F) == 4, "left = Relax");
+    check(Wheel::Direction(-.78F, -.62F) == 0, "upper left = Natural");
     for (int i = 0; i < Wheel::count; ++i) {
         check(Wheel::clockwise[Wheel::slots[i]] == i, "display-to-logical mapping");
         check(Wheel::Direction(std::cos(Wheel::Angle(i)), std::sin(Wheel::Angle(i))) == i,
@@ -28,14 +30,15 @@ int main()
     check(Wheel::Mouse(101, 0, 100) == -1, "outside is not a choice");
     Wheel::Stick s;
     check(s.Update(.1F, .1F, 1) == 1, "drift ignored");
-    check(s.Update(1, 0, 1) == 2, "stick selects companion");
+    check(s.Update(.78F, -.62F, 1) == 2, "stick selects companion");
     check(s.Update(0, 0, 2) == 2, "neutral retains choice");
-    int focus = s.Update(.7F, .7F, 2);
+    int focus = s.Update(1, .2F, 2);
     check(focus == 3, "rear selected");
-    check(s.Update(std::cos(61 * Wheel::pi / 180), std::sin(61 * Wheel::pi / 180), focus) == 3,
+    // The Rear/Custom boundary is at 38.6 degrees; the stick holds its choice for 8 more.
+    check(s.Update(std::cos(41 * Wheel::pi / 180), std::sin(41 * Wheel::pi / 180), focus) == 3,
           "boundary jitter retained");
-    check(s.Update(std::cos(70 * Wheel::pi / 180), std::sin(70 * Wheel::pi / 180), focus) == 5,
-          "deliberate crossing selects Vanilla");
+    check(s.Update(std::cos(50 * Wheel::pi / 180), std::sin(50 * Wheel::pi / 180), focus) == 6,
+          "deliberate crossing selects Custom");
     HudNotice notice;
     notice.Update(1, 0);
     notice.Update(1, 4.9F);

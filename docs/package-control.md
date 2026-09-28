@@ -62,6 +62,23 @@ not a replacement for their recruitment system. Use their own dialogue to recrui
 or dismiss them. Native packages from other mods can still outrank WWM, and private
 scripts can still conflict; import does not establish universal compatibility.
 
+**Adding works regardless (2026-09-25).** M'rissi could not be added back because
+WWM was in Vanilla, where every add path refused; the Party button was greyed out
+with no reason. Now:
+
+- Party Add, dialogue Add and the popup record the choice in any travel style,
+  including Vanilla and with WWM switched off. It takes effect once a style directs.
+- A recruited follower (NFF slot or player teammate) can be taken from anywhere, in
+  combat or a scene; the movement guards pause and resume them. Only an NPC with no
+  recruitment signal must be the loaded one under the crosshair, within 800 units.
+- The Party page also lists teammates from frameworks WWM cannot read. Their Add
+  falls through to explicit control that follows the teammate flag.
+- Losing the recruitment signal no longer ends control or excludes the NPC. A loss
+  that lasts 5 seconds pauses the import (`Paused until they follow you again`);
+  it resumes on its own when they follow again. Brief losses (a framework
+  re-slotting, a quest scene clearing the teammate flag) are ignored. Only Release
+  or death ends it. Log: `[PackageControl] Pausing ...` / `Resuming ...`.
+
 **Release** removes WWM's registration and managed state and excludes that
 NPC from automatic re-addition. Its temporary package aliases use the existing
 release lifecycle. The original AI resumes when Skyrim reevaluates packages.
@@ -88,9 +105,9 @@ save is discarded.
 - API-owned actors cannot be imported through the popup. Registering through an
   API transfers control back to that integration. Ordinary automatic enrollment
   and Party Add keep the stricter roster guard; no NPC is imported automatically.
-- Import requires a nearby, loaded, nonhostile NPC in the same interior cell or
-  outdoor worldspace, within 800 game units of the player, a free
-  party slot and an enabled travel style. Pending imports reserve slots too.
+- Import requires a living, nonhostile NPC that is not dismissed and a free party
+  slot. An NPC with no recruitment signal must also be loaded, in the same interior
+  cell or outdoor worldspace and within 800 units. Pending imports reserve slots too.
 
 ## Validation and in-game checks
 

@@ -131,6 +131,101 @@ int main()
     Check(!AnyRestPoses(RestContext::Wilderness, plain) && AnyRestPoses(RestContext::Wilderness, tuning),
           "area activities alone enable rest poses");
     Check(AnyRestPoses(RestContext::Tavern, plain), "inn refreshments stay available on their own");
+    // Meals only where a meal fits.
+    for (auto place : {RestPlace::Tavern, RestPlace::Home, RestPlace::PlayerHome, RestPlace::Hall}) {
+        Check(MealPlace(place, false), "inns, homes and halls have somewhere to eat");
+    }
+    for (auto place : {RestPlace::Town, RestPlace::Temple, RestPlace::Shop, RestPlace::Cave, RestPlace::Ruin}) {
+        Check(!MealPlace(place, false) && !MealPlace(place, true),
+              "no meals in the street, before an altar, at a counter or in a crypt");
+    }
+    Check(!MealPlace(RestPlace::Wild, false) && MealPlace(RestPlace::Wild, true),
+          "in the wilds a meal belongs at the campfire");
+    SandboxTuning meals;
+    Check(!NativeMeals(RestPlace::Town, RestContext::Settlement, false, true, meals),
+          "Skyrim's own sandbox never eats bread in the middle of town");
+    Check(NativeMeals(RestPlace::Home, RestContext::Interior, false, true, meals) &&
+              !NativeMeals(RestPlace::Home, RestContext::Interior, false, false, meals),
+          "a home meal waits for a real rest");
+    Check(NativeMeals(RestPlace::Tavern, RestContext::Tavern, false, false, meals),
+          "a short stop at the inn may still eat and drink");
+    Check(!NativeMeals(RestPlace::Wild, RestContext::Dungeon, true, true, meals),
+          "no camp meals at a bandit camp's fire");
+    meals.meals = false;
+    Check(!NativeMeals(RestPlace::Tavern, RestContext::Tavern, false, true, meals), "the meal switch wins");
+
+    SandboxTuning extras = tuning;
+    extras.extraPoses = true;
+    const auto town = Palette(RestPlace::Town, RestContext::Settlement, extras);
+    Check(!town.contains(RestActivity::Eat) && !town.contains(RestActivity::Drink) &&
+              !town.contains(RestActivity::Read) && !town.contains(RestActivity::Ground),
+          "in town they stand about: no food, drink, books or sitting in the road");
+    Check(town.contains(RestActivity::Stand) && town.contains(RestActivity::LookFar), "town rests look around");
+    SandboxTuning noArea = extras;
+    noArea.areaActivities = false;
+    const auto plainTown = Palette(RestPlace::Town, RestContext::Settlement, noArea);
+    Check(!plainTown.contains(RestActivity::Eat) && !plainTown.contains(RestActivity::Drink),
+          "extra poses alone never bring meals to the street");
+    SandboxTuning refreshOnly = tuning;
+    refreshOnly.areaActivities = false;
+    Check(Palette(RestPlace::Town, RestContext::Settlement, refreshOnly) == std::set{RestActivity::Stand},
+          "without extra poses a town rest has no scripted refreshments either");
+    const auto temple = Palette(RestPlace::Temple, RestContext::Interior, extras);
+    Check(!temple.contains(RestActivity::Stretch) && !temple.contains(RestActivity::Eat) &&
+              !temple.contains(RestActivity::Examine),
+          "temples are for prayer, not stretching or snacks");
+    const auto shop = Palette(RestPlace::Shop, RestContext::Interior, extras);
+    Check(!shop.contains(RestActivity::Read) && !shop.contains(RestActivity::Eat) &&
+              !shop.contains(RestActivity::Stretch),
+          "a shop floor is for looking at the wares");
+    const auto home = Palette(RestPlace::Home, RestContext::Interior, extras);
+    Check(!home.contains(RestActivity::Eat) && !home.contains(RestActivity::Drink),
+          "in someone else's home they eat at the table, not on their feet");
+    const auto own = Palette(RestPlace::PlayerHome, RestContext::Interior, extras);
+    Check(own.contains(RestActivity::Eat) && own.contains(RestActivity::Read), "at home they help themselves");
+
+    // Temporary rest is a short stop: nothing that settles in.
+    auto brief = [&](RestPlace place, RestContext context) {
+        std::set<RestActivity> seen;
+        for (std::uint32_t roll = 0; roll < 400; ++roll) {
+            seen.insert(ChoosePlaceActivity(place, context, roll, extras, {}, false));
+        }
+        return seen;
+    };
+    for (auto [place, context] : {std::pair{RestPlace::Wild, RestContext::Wilderness},
+                                  std::pair{RestPlace::Home, RestContext::Interior},
+                                  std::pair{RestPlace::PlayerHome, RestContext::Interior},
+                                  std::pair{RestPlace::Hall, RestContext::Interior}}) {
+        const auto seen = brief(place, context);
+        for (auto settling : {RestActivity::Ground, RestActivity::Eat, RestActivity::Read, RestActivity::Sweep,
+                              RestActivity::Study}) {
+            Check(!seen.contains(settling), "a short stop never sits down, eats, reads, studies or sweeps");
+        }
+        Check(!seen.empty(), "a short stop still has something to do");
+    }
+    Check(brief(RestPlace::Tavern, RestContext::Tavern).contains(RestActivity::Drink),
+          "waiting at the inn, a drink in hand");
+    for (std::uint32_t roll = 0; roll < 40; ++roll) {
+        Check(FeatureActivity(AreaFeature::Fire, RestPlace::Wild, roll, tuning, false) != RestActivity::Ground,
+              "a short stop at a fire crouches rather than sitting down");
+        Check(FeatureFollowUp(AreaFeature::Fire, RestPlace::Wild, roll, tuning, false) != RestActivity::Eat,
+              "no camp meal on a short stop");
+    }
+    std::set<RestActivity> camp;
+    for (std::uint32_t roll = 0; roll < 40; ++roll) {
+        camp.insert(FeatureFollowUp(AreaFeature::Fire, RestPlace::Wild, roll, tuning));
+    }
+    Check(camp.contains(RestActivity::Eat) && camp.contains(RestActivity::Ground),
+          "a Relax camp eats and sits by the fire");
+    SandboxTuning noMeals = tuning;
+    noMeals.meals = false;
+    for (std::uint32_t roll = 0; roll < 40; ++roll) {
+        Check(FeatureFollowUp(AreaFeature::Fire, RestPlace::Wild, roll, noMeals) != RestActivity::Eat,
+              "the meal switch covers camp meals");
+        Check(FeatureFollowUp(AreaFeature::Fire, RestPlace::Tavern, roll, tuning) != RestActivity::Eat,
+              "the hearth at the inn is for warming hands");
+    }
+
     for (auto activity : {RestActivity::LookFar, RestActivity::Pray, RestActivity::WipeBrow, RestActivity::Applaud}) {
         Check(FiniteRestActivity(activity) && RestPoseSeconds(activity, AreaFeature::None, 999) <= 12,
               "one-shot clips are held only briefly");

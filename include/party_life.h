@@ -47,6 +47,22 @@ namespace Wayfarer
                : p == Personality::Watchful ? 1.2F
                                             : 1.0F;
     }
+    // Sociable companions like company: they keep about 30% nearer than their place in the
+    // formation, never inside a step and a half of the player. The shape stays the same, only
+    // pulled in, so they still walk ahead in Lead and behind in Rear.
+    inline FormationSlot PersonalOffset(FormationSlot slot, Personality p)
+    {
+        if (p != Personality::Sociable) {
+            return slot;
+        }
+        constexpr float pull = .70F, nearest = 95.0F;
+        const float distance = std::hypot(slot.lateral, slot.longitudinal);
+        if (!std::isfinite(distance) || distance <= nearest) {
+            return slot;
+        }
+        const float scale = std::max(pull, nearest / distance);
+        return {slot.lateral * scale, slot.longitudinal * scale};
+    }
     inline int WatchWeight(Personality p)
     {
         return p == Personality::Watchful ? 4 : p == Personality::Sociable ? 1 : 2;

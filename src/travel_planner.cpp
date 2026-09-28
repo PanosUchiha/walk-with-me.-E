@@ -122,8 +122,24 @@ namespace Wayfarer
         }
     }
 
+    namespace
+    {
+        Custom::Formation custom;
+    }
+    void SetCustomFormation(const Custom::Formation& formation)
+    {
+        custom = Custom::Sanitize(formation);
+    }
+    const Custom::Formation& CustomFormation()
+    {
+        return custom;
+    }
+
     FormationSlot FormationPosition(FormationMode a_mode, int a_slot)
     {
+        if (a_mode == FormationMode::kCustom) {
+            return Custom::RolePosition(custom, a_slot);
+        }
 
         static constexpr std::array<FormationSlot, PARTY_CAPACITY> party{{{35, 225},
                                                                           {-115, 135},
@@ -215,7 +231,7 @@ namespace Wayfarer
                          std::uint32_t actorID)
     {
         auto base = FormationPosition(mode, role);
-        auto varied = actorID ? NaturalPosition(mode, role, actorID) : base;
+        auto varied = actorID && mode != FormationMode::kCustom ? NaturalPosition(mode, role, actorID) : base;
         const int count = NaturalStragglerCount(partySize, seed, distance);
         if (mode != FormationMode::kDynamic || !count) {
             return {varied, false};

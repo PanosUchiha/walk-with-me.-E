@@ -1,6 +1,7 @@
 #include "menu_ui.h"
 #include "SKSEMenuFramework.h"
 #include "command_gesture.h"
+#include "action_grid.h"
 #include "companion_menu.h"
 #include "engine_compatibility.h"
 #include "formation_controller.h"
@@ -38,6 +39,7 @@ namespace Wayfarer::Menu
         constexpr auto companionPauseName = "WalkWithMeCompanionPause";
         bool companionPauseRequested{};
         void QueueWheelBlur();
+        void OpenFormationEditor(const PartyView& view); // The formation editor window.
         // An invisible native menu lets Skyrim own the pause count and its cleanup.
         // It does not change Menu Framework's global freeze preference.
         class CompanionPauseMenu final : public RE::IMenu
@@ -75,7 +77,9 @@ namespace Wayfarer::Menu
         std::uint64_t packageGeneration{};
         bool packageFromWheel{};
         std::atomic<bool> packageShortcut{}, packageAccept{}, packageCancel{}, packagePush{};
-        std::atomic<bool> temporaryRestSaving{};
+        std::atomic<bool> toggleSaving{}; // One quick toggle saves at a time.
+        // The grid page is showing: Esc and B step back to the wheel instead of closing.
+        std::atomic<bool> gridBack{}, gridBackEnabled{};
         bool wheelBlurOwned{};
         std::atomic<bool> wheelCloseRequested{};
         void SyncWheelBlur()
@@ -129,19 +133,27 @@ namespace Wayfarer::Menu
         std::atomic<float> padX{}, padY{};
         std::atomic<std::uint64_t> padStickAt{}, orderNotice{};
         std::atomic<bool> padConfirm{}, padCancel{}, padUsed{};
-        std::atomic<int> padStep{};
+        std::atomic<int> padDx{}, padDy{}; // D-pad presses not yet read by the menu.
         std::uint32_t padHeld{};
         float hudPreviewScale{.8F}, hudPreviewHeight{.32F};
-        constexpr std::array<const char*, 6> profileNames{"Natural", "Lead",  "Companion",
-                                                          "Rear",    "Relax", "Vanilla"};
+        constexpr std::array<const char*, 7> profileNames{"Natural", "Lead",    "Companion", "Rear",
+                                                          "Relax",   "Vanilla", "Custom"};
         constexpr auto profileModes = OrderModes;
-        constexpr std::array<const char*, 6> styleHints{
+        constexpr std::array<const char*, 7> styleHints{
             "Find your own space as we travel",
             "Take the lead along our route",
             "Travel at my side",
             "Keep to the rear",
             "Stay here and make yourselves at home",
-            "Return travel and rest to Skyrim or your follower framework"};
+            "Return travel and rest to Skyrim or your follower framework",
+            "Travel in the formation you drew in Travel settings"};
+        // The order names as shown, with the player's own name for their custom formation.
+        std::array<const char*, 7> OrderNames(const PartyView& view)
+        {
+            auto names = profileNames;
+            names[6] = view.settings.customFormation.title.c_str();
+            return names;
+        }
         std::uint32_t KeyboardModifiers()
         {
             auto* input = RE::BSInputDeviceManager::GetSingleton();
@@ -175,6 +187,7 @@ namespace Wayfarer::Menu
         }
         void Cache(PartyView value)
         {
+            OrderVisuals::SetCustomEmblem(value.settings.customFormation.emblem);
             std::lock_guard lock(viewMutex);
             cached = std::move(value);
         }
@@ -234,8 +247,17 @@ namespace Wayfarer::Menu
             }
         }
 
+        constexpr int pathfinderIcon = 50, crestIcon = 100; // Beyond the Font Awesome headers.
         void Icon(Im::ImDrawList* draw, V c, float r, int type, Im::ImU32 color)
         {
+            if (type >= crestIcon) {
+                OrderVisuals::Crest(draw, c, r * 2.5F, type - crestIcon, 1, color);
+                return;
+            }
+            if (type == pathfinderIcon) {
+                OrderVisuals::Icon(draw, c, r * 2.7F, 9, 3.0F, 1, true, color);
+                return;
+            }
             static const std::array<std::string, 9> glyphs = [] {
                 std::array<std::string, 9> result;
                 constexpr unsigned codes[]{0xf14e, 0xf024, 0xf132, 0xf06d, 0xf018,
@@ -254,6 +276,46 @@ namespace Wayfarer::Menu
                           {c.x - bounds.x * ratio * .5F, c.y - bounds.y * ratio * .5F}, color, glyph.c_str());
             FontAwesome::Pop();
         }
+        // EMBLEM_PICKER_BEGIN: shared with the offline visual proof.
+        // Sixteen emblems from Game-icons.net, none used elsewhere in the mod, as a wrapping row of
+        // tiles; the chosen one is framed in yellow. Returns true when the choice changed.
+        bool EmblemPicker(V start, float width, float cell, int& emblem)
+        {
+            const float spacing = cell * .12F;
+            const int across = std::max(1, static_cast<int>((width + spacing) / (cell + spacing)));
+            auto* draw = Im::GetWindowDrawList();
+            bool changed = false;
+            for (int i = 0; i < Custom::emblemCount; ++i) {
+                const V at{start.x + (i % across) * (cell + spacing), start.y + (i / across) * (cell + spacing)};
+                Im::SetCursorScreenPos(at);
+                Im::PushID(i);
+                if (Im::InvisibleButton("emblem", {cell, cell}) && emblem != i) {
+                    emblem = i;
+                    changed = true;
+                }
+                const bool over = Im::IsItemHovered(), chosen = emblem == i;
+                if (over) {
+                    Im::SetTooltip("%s", Custom::emblems[i].label);
+                }
+                Im::PopID();
+                const float r = cell * .16F;
+                Draw::AddRectFilled(draw, at, {at.x + cell, at.y + cell},
+                                    chosen ? IM_COL32(58, 50, 24, 255)
+                                    : over ? IM_COL32(42, 50, 50, 255)
+                                           : IM_COL32(27, 35, 38, 235),
+                                    r, 0);
+                Draw::AddRect(draw, at, {at.x + cell, at.y + cell},
+                              chosen ? IM_COL32(240, 199, 74, 255) : IM_COL32(168, 153, 118, over ? 160 : 60), r, 0,
+                              chosen ? 2.0F : 1.0F);
+                OrderVisuals::Crest(draw, {at.x + cell * .5F, at.y + cell * .5F}, cell * .72F, i, 1,
+                                    chosen ? IM_COL32(248, 214, 110, 255) : IM_COL32(226, 218, 201, 255));
+            }
+            const int rowsUsed = (Custom::emblemCount + across - 1) / across;
+            Im::SetCursorScreenPos({start.x, start.y + rowsUsed * (cell + spacing)});
+            Im::Dummy({1, 0});
+            return changed;
+        }
+        // EMBLEM_PICKER_END
         void Label(const char* text, int icon = 0)
         {
             Space(0.35F);
@@ -472,6 +534,7 @@ namespace Wayfarer::Menu
         void OrderCards(const PartyView& view)
         {
             Im::BeginDisabled(!view.inGame || !view.enabled);
+            const auto names = OrderNames(view);
             if (Im::BeginTable("orders", 3, Im::ImGuiTableFlags_SizingStretchSame)) {
                 for (int i = 0; i < Wheel::count; ++i) {
                     Im::TableNextColumn();
@@ -480,10 +543,14 @@ namespace Wayfarer::Menu
                         Im::PushStyleColor(Im::ImGuiCol_Text, gold);
                         Im::PushStyleColor(Im::ImGuiCol_Button, IM_COL32(67, 62, 49, 230));
                     }
-                    if (Im::Button(profileNames[i], {-1, 0})) {
+                    const bool unavailable =
+                        profileModes[i] == FormationMode::kCustom && !view.settings.customFormation.Defined();
+                    Im::BeginDisabled(unavailable);
+                    if (Im::Button(names[i], {-1, 0})) {
                         IssueStyle(profileModes[i]);
                     }
-                    Help(styleHints[i]);
+                    Im::EndDisabled();
+                    Help(unavailable ? "Draw a custom formation in Travel settings first." : styleHints[i]);
                     if (selected) {
                         Im::PopStyleColor(2);
                     }
@@ -808,9 +875,8 @@ namespace Wayfarer::Menu
                     Im::TableNextColumn();
                     const bool remove =
                         row.packageControlled || row.manuallyAdded || (!row.excluded && row.managed);
-                    Im::BeginDisabled(row.apiRegistered ||
-                                      (!remove && (!row.eligible || !view.enabled ||
-                                                   view.mode == FormationMode::kVanilla)));
+                    // Adding records the choice in any travel style; it takes effect once one directs.
+                    Im::BeginDisabled(row.apiRegistered || (!remove && !row.eligible && !row.teammate));
                     if (Im::Button(row.packageControlled ? "Control" : remove ? "Remove" : "Add", {-1, 0})) {
                         const auto id = row.id;
                         const auto stamp = view.generation;
@@ -836,6 +902,7 @@ namespace Wayfarer::Menu
                          : remove ? "Release Walk With Me's control and prevent automatic re-addition. This "
                                     "does not dismiss the follower."
                                   : "Allow Walk With Me to direct this companion's travel and relaxation. "
+                                    "Works for any follower, whatever recruited them, and in any travel style. "
                                     "The choice is saved and can be removed here or in dialogue.");
                     Im::EndDisabled();
                     Im::PopID();
@@ -968,10 +1035,18 @@ namespace Wayfarer::Menu
                 Im::TextUnformatted("Default travel style");
                 Im::TableNextColumn();
                 Im::SetNextItemWidth(-1);
-                int mode = static_cast<int>(draft.mode);
-                if (Im::Combo("##mode", &mode, "Natural\0Lead\0Companion\0Rear\0Relax\0Vanilla\0")) {
-                    draft.mode = profileModes[mode];
-                    dirty = true;
+                auto styles = profileNames;
+                styles[6] = draft.customFormation.title.c_str();
+                const int choices = draft.customFormation.Defined() ? Wheel::count : Wheel::count - 1;
+                const int current = std::clamp(static_cast<int>(draft.mode), 0, Wheel::count - 1);
+                if (Im::BeginCombo("##mode", styles[current])) {
+                    for (int i = 0; i < choices; ++i) {
+                        if (Im::Selectable(styles[i], i == current)) {
+                            draft.mode = profileModes[i];
+                            dirty = true;
+                        }
+                    }
+                    Im::EndCombo();
                 }
                 Slider("Spacing", draft.travel.spacing, .6F, 3.0F, "%.2fx",
                        "Distance between travelling companions. Larger values spread them out; interiors and "
@@ -995,6 +1070,61 @@ namespace Wayfarer::Menu
                 }
                 Im::EndTable();
             }
+            if (Group("Custom formation", crestIcon + draft.customFormation.emblem) && Rows("customFormation")) {
+                auto& custom = draft.customFormation;
+                Im::TableNextColumn();
+                Im::AlignTextToFramePadding();
+                Im::TextUnformatted("Name");
+                Help("What the formation is called on the party wheel, the orders HUD and here.");
+                Im::TableNextColumn();
+                static std::array<char, 64> titleBuffer{};
+                static bool editingTitle = false;
+                if (!editingTitle) {
+                    const auto n = std::min(custom.title.size(), Custom::maxTitle);
+                    std::fill(titleBuffer.begin(), titleBuffer.end(), char{});
+                    std::copy_n(custom.title.begin(), n, titleBuffer.begin());
+                }
+                Im::SetNextItemWidth(-1);
+                if (Im::InputText("##customTitle", titleBuffer.data(), Custom::maxTitle + 1)) {
+                    custom.title = titleBuffer.data();
+                    dirty = true;
+                }
+                editingTitle = Im::IsItemActive();
+                Im::TableNextColumn();
+                Im::AlignTextToFramePadding();
+                Im::TextUnformatted("Emblem");
+                Help("The icon shown for the formation on the party wheel and the orders HUD.");
+                Im::TableNextColumn();
+                if (EmblemPicker(Im::GetCursorScreenPos(), Im::GetContentRegionAvail().x, E(2.1F), custom.emblem)) {
+                    dirty = true;
+                }
+                std::string reserved;
+                for (int i = 0; i < custom.count; ++i) {
+                    if (!custom.names[i].empty()) {
+                        reserved += (reserved.empty() ? "" : ", ") + custom.names[i] + " at " + std::to_string(i + 1);
+                    }
+                }
+                Im::TableNextColumn();
+                Im::AlignTextToFramePadding();
+                Im::TextUnformatted("Places");
+                Help("Draw where each companion walks, and optionally who stands where. It appears on the "
+                     "party wheel once saved.");
+                Im::TableNextColumn();
+                Im::TextUnformatted(custom.Defined()
+                                        ? (std::to_string(custom.count) + (custom.count == 1 ? " place" : " places") +
+                                           (reserved.empty() ? "" : " - " + reserved))
+                                              .c_str()
+                                        : "None yet");
+                Im::TableNextColumn();
+                Im::TableNextColumn();
+                Im::BeginDisabled(!view.inGame);
+                if (Im::Button(custom.Defined() ? "Edit formation" : "Create formation", {-1, 0})) {
+                    OpenFormationEditor(view);
+                }
+                Help(view.inGame ? "Open the formation editor." : "Load a save first; the editor lists your party.");
+                Im::EndDisabled();
+                Im::EndTable();
+            }
             if (Group("Catch-up & teleport", 4) && Rows("catchup")) {
                 Slider("Catch-up response", draft.travel.catchUpSeconds, 1, 6, "%.1f s",
                        "Lower values close gaps more quickly.");
@@ -1010,14 +1140,26 @@ namespace Wayfarer::Menu
                        "switching.");
                 Toggle("Teleport distant companions", draft.teleportCatchup,
                        "Bring companions back after two seconds far away, or three seconds left in another "
-                       "cell. Works while you ride, sneak, fight or stand still. Lands them behind you, then "
-                       "on your trail, then anywhere reachable nearby. Waiting, fighting, scripted, "
-                       "seated and relaxing companions stay put, and so does everyone in Sovngarde, "
-                       "Skuldafn, Apocrypha, the Soul Cairn and the Underforge.");
+                       "cell. Works while you ride, sneak, fight, sit, craft or stand still, and pulls a "
+                       "companion out of a chair or bed if need be. Lands them behind you, then on your "
+                       "trail, then anywhere reachable nearby. Waiting, fighting, riding and scripted "
+                       "companions stay put, and so does everyone in Sovngarde, Skuldafn, Apocrypha, the "
+                       "Soul Cairn and the Underforge.");
                 Im::BeginDisabled(!draft.teleportCatchup);
                 Slider(
                     "Teleport beyond", draft.teleportDistance, 1500, 15000, "%.0f units",
                     "Distance from you before teleport catch-up. Each companion has an 8-second cooldown.");
+                Im::EndDisabled();
+                Toggle("Leave relaxing companions in place", draft.holdRelaxing,
+                       "During a Relax order, companions keep their camp however far you go: nothing "
+                       "teleports them, NFF included. Off: they catch up like everyone else and relax "
+                       "wherever they land. Temporary rest never holds anyone back.");
+                Im::BeginDisabled(!view.nffInstalled);
+                Toggle("Take over NFF's catch-up", draft.replaceFrameworkCatchup,
+                       "While Walk With Me teleports, it also teleports NFF's own followers and parks NFF's "
+                       "Catch Up timer, so the two never race and a Relax camp stays put. NFF's value is put "
+                       "back before every save, while the journal is open, and whenever this is off. "
+                       "Nothing changes if NFF's Catch Up is off.");
                 Im::EndDisabled();
                 Im::EndTable();
             }
@@ -1122,6 +1264,30 @@ namespace Wayfarer::Menu
                 Slider("Release beyond", hands.releaseDistance, hands.connectDistance + 10, 160, "%.0f units",
                        "Release when the pair separates beyond this distance. TETHER allows a brief "
                        "grace period. Reconnection waits through the lead-in again.");
+                if (classic) {
+                    Slider("Hand spacing", hands.spacing, 36, 56, "%.0f units",
+                           "Classic: distance between you and your companion while holding hands. Around "
+                           "40 puts your shoulders together; wider leaves room between you. A change "
+                           "releases the grip, which then re-forms at the new spacing.");
+                    Im::TableNextColumn();
+                    Im::TextUnformatted("Companion side");
+                    Im::TableNextColumn();
+                    Im::SetNextItemWidth(-1);
+                    static constexpr const char* sides[]{"Left", "Nearest", "Right"};
+                    hands.side = std::clamp(hands.side, -1, 1);
+                    if (Im::BeginCombo("##handHoldSide", sides[hands.side + 1])) {
+                        for (int side = -1; side <= 1; ++side) {
+                            if (Im::Selectable(sides[side + 1], hands.side == side)) {
+                                hands.side = side;
+                                dirty = true;
+                            }
+                        }
+                        Im::EndCombo();
+                    }
+                    Help("Classic: which of your hands the companion takes. Nearest uses whichever side "
+                         "they arrive on. If your camera sits over one shoulder and the companion fades "
+                         "out while holding hands, choose the other side. A change releases the grip.");
+                }
                 Im::EndTable();
             }
             if (Im::SmallButton("Restore travel defaults")) {
@@ -1132,6 +1298,8 @@ namespace Wayfarer::Menu
                 draft.distantCatchupEnd = 500;
                 draft.teleportCatchup = true;
                 draft.teleportDistance = 4000;
+                draft.holdRelaxing = true;
+                draft.replaceFrameworkCatchup = true;
                 draft.forwardCollision = true;
                 draft.preferredSide = 1;
                 draft.disableIndoors = false;
@@ -1261,12 +1429,48 @@ namespace Wayfarer::Menu
             }
             Footer();
         }
-        void __stdcall RenderLoot()
+        // Who takes a role: anyone, or one companion (a persistent reference key).
+        void CompanionPicker(const char* id, const PartyView& view, std::string& key, std::string& name,
+                             const char* anyone)
+        {
+            std::string shown = key.empty() ? anyone : name.empty() ? "Selected companion" : name;
+            if (!key.empty() && std::none_of(view.party.begin(), view.party.end(),
+                                             [&](const auto& row) { return row.handHoldKey == key; })) {
+                shown += " (not nearby)";
+            }
+            Im::SetNextItemWidth(-1);
+            if (Im::BeginCombo(id, shown.c_str())) {
+                if (Im::Selectable(anyone, key.empty())) {
+                    key.clear();
+                    name.clear();
+                    dirty = true;
+                }
+                for (const auto& row : view.party) {
+                    Im::PushID(static_cast<int>(row.id));
+                    const bool selectable = !row.excluded && !row.handHoldKey.empty();
+                    Im::BeginDisabled(!selectable);
+                    if (Im::Selectable(row.name.c_str(), !key.empty() && row.handHoldKey == key)) {
+                        key = row.handHoldKey;
+                        name = row.name;
+                        dirty = true;
+                    }
+                    Im::EndDisabled();
+                    if (!selectable) {
+                        Help(row.handHoldKey.empty() ? "This temporary actor has no persistent reference "
+                                                       "to remember. Choose a placed companion."
+                                                     : "Include this companion on the Party page first.");
+                    }
+                    Im::PopID();
+                }
+                Im::EndCombo();
+            }
+        }
+        void __stdcall RenderRoles()
         {
             const auto view = Read();
             Prepare(view);
-            SettingsPage page("WalkWithMeLoot");
-            Header(view, "LOOT");
+            SettingsPage page("WalkWithMeRoles");
+            Header(view, "ROLES");
             if (Group("Loot scouting", 8)) {
                 auto& loot = draft.loot;
                 dirty |= Im::Checkbox("Point out loot", &loot.enabled);
@@ -1278,42 +1482,7 @@ namespace Wayfarer::Menu
                     Im::TableNextColumn();
                     Im::TextUnformatted("Loot finder");
                     Im::TableNextColumn();
-                    Im::SetNextItemWidth(-1);
-                    std::string finder = loot.finder.empty()       ? "Any companion"
-                                         : loot.finderName.empty() ? "Selected companion"
-                                                                   : loot.finderName;
-                    if (!loot.finder.empty() &&
-                        std::none_of(view.party.begin(), view.party.end(),
-                                     [&](const auto& row) { return row.handHoldKey == loot.finder; })) {
-                        finder += " (not nearby)";
-                    }
-                    if (Im::BeginCombo("##lootFinder", finder.c_str())) {
-                        if (Im::Selectable("Any companion", loot.finder.empty())) {
-                            loot.finder.clear();
-                            loot.finderName.clear();
-                            dirty = true;
-                        }
-                        for (const auto& row : view.party) {
-                            Im::PushID(static_cast<int>(row.id));
-                            const bool selectable = !row.excluded && !row.handHoldKey.empty();
-                            Im::BeginDisabled(!selectable);
-                            if (Im::Selectable(row.name.c_str(),
-                                               !loot.finder.empty() && row.handHoldKey == loot.finder)) {
-                                loot.finder = row.handHoldKey;
-                                loot.finderName = row.name;
-                                dirty = true;
-                            }
-                            Im::EndDisabled();
-                            if (!selectable) {
-                                Help(row.handHoldKey.empty()
-                                         ? "This temporary actor has no persistent reference "
-                                           "to remember. Choose a placed companion."
-                                         : "Include this companion on the Party page first.");
-                            }
-                            Im::PopID();
-                        }
-                        Im::EndCombo();
-                    }
+                    CompanionPicker("##lootFinder", view, loot.finder, loot.finderName, "Any companion");
                     Help("Only one companion goes to a find at a time. Choose who does it, or leave Any "
                          "companion "
                          "to send whoever is nearest. Selection saves automatically.");
@@ -1370,6 +1539,60 @@ namespace Wayfarer::Menu
                 draft.loot.areaDistance = defaults.areaDistance;
                 dirty = true;
             }
+            if (Group("Pathfinder", pathfinderIcon)) {
+                auto& path = draft.pathfinder;
+                dirty |= Im::Checkbox("Point out new places", &path.enabled);
+                Help("In Natural, Lead, Companion and Custom, a companion who spots a place you have never found "
+                     "runs out toward it, turns to wave at you and points it out, then leads the way. Outdoors "
+                     "only, never while fighting, sneaking or riding.");
+                Im::BeginDisabled(!path.enabled);
+                if (Rows("pathfinderWho")) {
+                    Im::TableNextColumn();
+                    Im::TextUnformatted("Pathfinder");
+                    Im::TableNextColumn();
+                    CompanionPicker("##pathfinder", view, path.companion, path.companionName,
+                                    "Any companion, curious first");
+                    Help("Who points places out. Any companion lets whoever can see it go, a curious one first.");
+                    Im::EndTable();
+                }
+                if (Checks("pathfinderOptions")) {
+                    Check("Wave first", path.wave, "Turn to you and wave before pointing, to catch your eye.");
+                    Check("Name what they saw", path.notice,
+                          "Show a notice naming what they saw and which way it lies.");
+                    Check("Lead the way", path.lead,
+                          "After pointing it out, keep going toward it. Whenever they get far enough ahead they "
+                          "stop and wave you on, and walk on once you come close. Go another way, or find it, "
+                          "and they come back.");
+                    Im::EndTable();
+                }
+                Im::EndDisabled();
+            }
+            if (Group("Pathfinder tuning", pathfinderIcon, false) && Rows("pathfinderTuning")) {
+                auto& path = draft.pathfinder;
+                Im::BeginDisabled(!path.enabled);
+                Slider("Notice places within", path.range, 3000, 12000, "%.0f units",
+                       "How far away an undiscovered place can be spotted. Places closer than 1500 units are "
+                       "already on your compass.");
+                Slider("Stop ahead of you at", path.run, 400, 3000, "%.0f units",
+                       "How far ahead of you, straight toward the place, the pathfinder gets before stopping "
+                       "to wave you on. They stop 450 units short of the place itself.");
+                Im::BeginDisabled(!path.lead);
+                Slider("Walk on when you're within", path.resume, 200, 1200, "%.0f units",
+                       "How close you come before they lead on. Never more than half the stopping distance.");
+                Im::EndDisabled();
+                Slider("Between sightings", path.cooldown, 20, 300, "%.0f s",
+                       "The shortest time between two places being pointed out.");
+                Im::EndDisabled();
+                Im::EndTable();
+            }
+            if (Im::SmallButton("Restore pathfinder tuning")) {
+                const Pathfinder::Tuning defaults;
+                draft.pathfinder.range = defaults.range;
+                draft.pathfinder.run = defaults.run;
+                draft.pathfinder.resume = defaults.resume;
+                draft.pathfinder.cooldown = defaults.cooldown;
+                dirty = true;
+            }
             Footer();
         }
         void __stdcall RenderInterface()
@@ -1392,6 +1615,10 @@ namespace Wayfarer::Menu
                       "An animated chest marks the loot finder: ivory for ordinary loot, gold for valuable "
                       "items. "
                       "Requires loot scouting on the Loot page.");
+                Check("Show pathfinder icons", draft.pathfinder.icon,
+                      "The Pathfinder emblem floats above a companion from the moment they spot a new place "
+                      "until they have pointed it out, or until they stop. Requires Pathfinder on the Roles "
+                      "page.");
                 Im::EndTable();
             }
             if (Group("Order emblem", 0)) {
@@ -1511,62 +1738,300 @@ namespace Wayfarer::Menu
             Footer();
         }
 
-        // ORDER_UTILITY_CARD_BEGIN: shared with the offline visual proof.
-        bool OrderUtilityCard(const char* id, V at, V size, int kind, bool enabled, bool on,
-                              const char* caption, float elapsed, float visibility, float& hover,
-                              float& toggle)
+        // PARTY_HEADER_BEGIN: shared with the offline visual proof.
+        constexpr auto yellow = IM_COL32(240, 199, 74, 255);
+        Im::ImU32 Faded(Im::ImU32 color, float alpha)
+        {
+            const auto a = static_cast<Im::ImU32>(((color >> 24) & 255) * std::clamp(alpha, 0.0F, 1.0F));
+            return (color & 0x00FFFFFFu) | (a << 24);
+        }
+        Im::ImU32 Blend(Im::ImU32 from, Im::ImU32 to, float t)
+        {
+            t = std::clamp(t, 0.0F, 1.0F);
+            Im::ImU32 result = 0;
+            for (int shift = 0; shift < 32; shift += 8) {
+                const float a = static_cast<float>((from >> shift) & 255), b = static_cast<float>((to >> shift) & 255);
+                result |= static_cast<Im::ImU32>(a + (b - a) * t + .5F) << shift;
+            }
+            return result;
+        }
+        void CenteredText(Im::ImDrawList* draw, const char* value, V at, float size, Im::ImU32 color, float width)
+        {
+            const auto bounds = Im::CalcTextSize(value);
+            size = std::min(size, width * Im::GetFontSize() / std::max(bounds.x, 1.0F));
+            Draw::AddText(draw, Im::GetFont(), size, {at.x - bounds.x * size / Im::GetFontSize() * .5F, at.y}, color,
+                          value);
+        }
+        // The title stays put while the pages move; the subtitle says which page is showing.
+        void PartyHeader(Im::ImDrawList* draw, V origin, float w, float fade, float page)
+        {
+            const float x = origin.x + w * .5F;
+            CenteredText(draw, "W A L K   W I T H   M E", {x, origin.y + w * .005F}, w * .025F, Faded(gold, fade),
+                         w * .8F);
+            CenteredText(draw, "P A R T Y   O R D E R S", {x, origin.y + w * .042F}, w * .017F,
+                         Faded(muted, fade * (1 - page)), w * .8F);
+            CenteredText(draw, "P A R T Y   A C T I O N S", {x, origin.y + w * .042F}, w * .017F,
+                         Faded(yellow, fade * page), w * .8F);
+            const float y = origin.y + w * .018F;
+            Draw::AddLine(draw, {x - w * .29F, y}, {x - w * .20F, y}, IM_COL32(180, 163, 127, 65 * fade), 1);
+            Draw::AddLine(draw, {x + w * .20F, y}, {x + w * .29F, y}, IM_COL32(180, 163, 127, 65 * fade), 1);
+        }
+        // PARTY_HEADER_END
+        // ACTION_GRID_BEGIN: shared with the offline visual proof.
+        struct GridTile
+        {
+            const char* label{};
+            std::string caption;
+            bool enabled{true}, toggle{}, on{};
+        };
+        // A translucent bar pointing at the other page; its chevrons drift the way it leads.
+        bool PageBar(const char* id, V at, V size, bool down, const char* label, float visibility, float elapsed,
+                     float& hover)
         {
             Im::SetCursorScreenPos(at);
-            Im::BeginDisabled(!enabled);
             const bool clicked = Im::InvisibleButton(id, size);
-            const bool over = Im::IsItemHovered();
-            const bool held = Im::IsItemActive();
-            Im::EndDisabled();
-            const float dt = std::min(Im::GetIO()->DeltaTime, .05F);
-            hover = Wheel::Follow(hover, over ? 1.0F : 0.0F, dt, 12);
-            toggle = Wheel::Follow(toggle, on ? 1.0F : 0.0F, dt, 16);
-            const float alpha = visibility * (enabled ? 1.0F : .48F);
-            at.y += size.y * (.16F * (1 - visibility) - .045F * hover + .025F * held);
+            const bool over = Im::IsItemHovered(), held = Im::IsItemActive();
+            hover = Wheel::Follow(hover, over ? 1.0F : 0.0F, std::min(Im::GetIO()->DeltaTime, .05F), 12);
             auto* draw = Im::GetWindowDrawList();
-            const V end{at.x + size.x, at.y + size.y};
-            const float rounding = size.y * .12F;
-            Draw::AddRectFilled(draw, {at.x, at.y + 4}, {end.x, end.y + 4}, IM_COL32(0, 0, 0, 55 * alpha),
-                                rounding, 0);
-            Draw::AddRectFilled(draw, at, end,
-                                IM_COL32(26 + 9 * hover, 34 + 10 * hover, 37 + 9 * hover, 245 * alpha),
-                                rounding, 0);
-            Draw::AddRect(draw, at, end, IM_COL32(168, 153, 118, (45 + 100 * hover) * alpha), rounding, 0, 1);
-            Draw::AddLine(draw, {at.x + rounding, at.y}, {end.x - rounding, at.y},
-                          IM_COL32(222, 199, 146, (20 + 55 * hover) * alpha), 1);
-            const V icon{at.x + size.y * .46F, at.y + size.y * .50F};
-            OrderVisuals::Icon(draw, icon, size.y * .62F, kind ? 4 : 6,
-                               kind ? std::fmod(elapsed, 3.2F) : elapsed,
-                               alpha * (kind ? (.65F + .35F * toggle) : 1.0F), true);
-            const float left = at.x + size.y * .9F;
-            const float maxWidth = size.x - size.y * .98F - (kind ? size.x * .18F : 0);
-            auto label = [&](const char* value, float y, float fontSize, Im::ImU32 color) {
-                const auto measured = Im::CalcTextSize(value);
-                fontSize = std::min(fontSize, maxWidth * Im::GetFontSize() / std::max(measured.x, 1.0F));
-                Draw::AddText(draw, Im::GetFont(), fontSize, {left, y}, color, value);
-            };
-            label(kind ? "Temporary relaxation" : "Teleport party", at.y + size.y * .25F, size.y * .22F,
-                  IM_COL32(225, 219, 201, 255 * alpha));
-            label(caption, at.y + size.y * .57F, size.y * .16F, IM_COL32(154, 166, 163, 240 * alpha));
-            if (kind) {
-                const float trackW = size.x * .135F, trackH = size.y * .235F;
-                const V start{end.x - size.x * .17F, icon.y - trackH * .5F};
-                Draw::AddRectFilled(
-                    draw, start, {start.x + trackW, start.y + trackH},
-                    IM_COL32(53 + 41 * toggle, 62 + 49 * toggle, 63 + 32 * toggle, 255 * alpha), trackH * .5F,
-                    0);
-                const float knob = trackH * .36F;
-                Draw::AddCircleFilled(
-                    draw, {start.x + trackH * .5F + (trackW - trackH) * toggle, icon.y}, knob,
-                    IM_COL32(181 + 53 * toggle, 185 + 40 * toggle, 177 + 23 * toggle, 255 * alpha), 20);
+            const float a = std::clamp(visibility, 0.0F, 1.0F);
+            at.y += size.y * (held ? .04F : 0);
+            const V end{at.x + size.x, at.y + size.y}, mid{at.x + size.x * .5F, at.y + size.y * .5F};
+            const float r = size.y * .5F;
+            Draw::AddRectFilled(draw, at, end, IM_COL32(240, 199, 74, (9 + 17 * hover) * a), r, 0);
+            Draw::AddRect(draw, at, end, IM_COL32(240, 199, 74, (30 + 75 * hover) * a), r, 0, 1);
+            // Two fine rules run out from the label, like the ones beside the title.
+            const float labelSize = size.y * .27F;
+            const float labelWidth = Im::CalcTextSize(label).x * labelSize / Im::GetFontSize();
+            CenteredText(draw, label, {mid.x, mid.y - labelSize * .55F}, labelSize,
+                         Faded(Blend(IM_COL32(214, 190, 120, 255), yellow, hover), a), size.x * .5F);
+            const float dir = down ? 1.0F : -1.0F;
+            const float drift = std::sin(elapsed * 3.1F) * size.y * .055F * dir;
+            const float hw = size.y * .14F, hh = size.y * .075F;
+            for (int side = -1; side <= 1; side += 2) {
+                const float cx = mid.x + side * (labelWidth * .5F + size.y * .62F);
+                const float cy = mid.y + drift;
+                const auto color = IM_COL32(240, 199, 74, (150 + 105 * hover) * a);
+                Draw::AddLine(draw, {cx - hw, cy - hh * dir}, {cx, cy + hh * dir}, color, 2);
+                Draw::AddLine(draw, {cx, cy + hh * dir}, {cx + hw, cy - hh * dir}, color, 2);
+                const float rule0 = cx + side * size.y * .40F, rule1 = mid.x + side * size.x * .40F;
+                Draw::AddLine(draw, {rule0, mid.y}, {rule1, mid.y}, IM_COL32(240, 199, 74, (22 + 40 * hover) * a), 1);
             }
-            return enabled && clicked;
+            return clicked;
         }
-        // ORDER_UTILITY_CARD_END
+        // The party actions page: six tiles that rise in one after another, a yellow selection frame
+        // that glides between them, and a line under the grid explaining the focused one. Returns the
+        // tile clicked this frame, or -1; `hovered` is the tile under the mouse.
+        int ActionGridPage(V origin, float w, const std::array<GridTile, ActionGrid::count>& tiles, int focus,
+                           const ActionGrid::Motion& motion, float visibility, bool interactive, int& hovered)
+        {
+            static constexpr const char* details[ActionGrid::count]{
+                "Bring every travelling companion to clear ground beside you, even from another cell.",
+                "When you stop, the party settles in nearby. Off: they wait on their feet.",
+                "Take or return control of the companion you were looking at.",
+                "Switch party guidance on or off. Off hands everyone back to their own AI.",
+                "Walk hand in hand with your chosen partner in Companion mode.",
+                "Your finder points out chests, bodies and valuables worth a look.",
+                "Your pathfinder points out places you have never found, in Natural, Lead and Companion."};
+            auto* draw = Im::GetWindowDrawList();
+            const float lift = w * .05F * (1 - motion.page);
+            const float a0 = std::clamp(visibility, 0.0F, 1.0F);
+            // One label size for every tile: the largest at which every label fits, a two-word name
+            // breaking onto two lines rather than shrinking.
+            std::array<std::array<std::string, 2>, ActionGrid::count> lines;
+            float labelSize = ActionGrid::TileBox(0, w).h * .10F;
+            {
+                Inscription font;
+                const float room = ActionGrid::TileBox(0, w).w * .86F;
+                auto width = [](const std::string& text) { return Im::CalcTextSize(text.c_str()).x; };
+                for (int i = 0; i < ActionGrid::count; ++i) {
+                    const std::string label = tiles[i].label ? tiles[i].label : "";
+                    lines[i] = {label, {}};
+                    const auto space = label.find(' ');
+                    if (space != std::string::npos && width(label) * labelSize / Im::GetFontSize() > room) {
+                        lines[i] = {label.substr(0, space), label.substr(space + 1)};
+                    }
+                    for (const auto& line : lines[i]) {
+                        labelSize = std::min(labelSize, room * Im::GetFontSize() / std::max(width(line), 1.0F));
+                    }
+                }
+            }
+            int clicked = -1;
+            hovered = -1;
+            for (int i = 0; i < ActionGrid::count; ++i) {
+                const auto& tile = tiles[i];
+                const auto box = ActionGrid::TileBox(i, w);
+                if (interactive) {
+                    // The hit rectangle stays still while the artwork settles.
+                    Im::SetCursorScreenPos({origin.x + box.x, origin.y + box.y});
+                    Im::PushID(i);
+                    const bool click = Im::InvisibleButton("tile", {box.w, box.h});
+                    if (Im::IsItemHovered(Im::ImGuiHoveredFlags_AllowWhenDisabled)) {
+                        hovered = i;
+                    }
+                    Im::PopID();
+                    if (click && tile.enabled) {
+                        clicked = i;
+                    }
+                }
+                const float reveal = motion.Reveal(i);
+                const float h = motion.highlight[i], f = motion.flash[i], on = motion.toggle[i];
+                const float a = a0 * reveal * (tile.enabled ? 1.0F : .42F);
+                if (a <= .003F) {
+                    continue;
+                }
+                const V at{origin.x + box.x, origin.y + box.y + lift + box.h * (.12F * (1 - reveal) - .03F * h)};
+                const V end{at.x + box.w, at.y + box.h};
+                const float r = box.h * .075F;
+                Draw::AddRectFilled(draw, {at.x, at.y + box.h * .03F}, {end.x, end.y + box.h * .03F},
+                                    IM_COL32(0, 0, 0, (50 + 30 * h) * a), r, 0);
+                const auto fill = Blend(IM_COL32(24, 31, 35, 238), IM_COL32(55, 49, 26, 246), h * .9F + f * .3F);
+                Draw::AddRectFilled(draw, at, end, Faded(fill, a), r, 0);
+                // A warm pool of light behind the icon on the focused tile.
+                const V icon{at.x + box.w * .5F, at.y + box.h * .37F};
+                for (int ring = 3; ring > 0; --ring) {
+                    Draw::AddCircleFilled(draw, icon, box.h * (.12F + .07F * ring),
+                                          IM_COL32(240, 199, 74, (7 + 10 * f) * h * a), 40);
+                }
+                Draw::AddRect(draw, at, end, Faded(Blend(IM_COL32(168, 153, 118, 50), IM_COL32(240, 199, 74, 150), h), a),
+                              r, 0, 1);
+                const float reach = box.w * (.10F + .30F * h);
+                Draw::AddLine(draw, {icon.x - reach, at.y}, {icon.x + reach, at.y},
+                              IM_COL32(246, 214, 120, (40 + 150 * h) * a), 1);
+                const float t = i == focus ? motion.focusElapsed : 3.0F;
+                const float iconSize = box.h * (.40F + .03F * h);
+                const auto tint = Faded(Blend(IM_COL32(226, 218, 201, 255), IM_COL32(248, 214, 110, 255), h), a);
+                switch (i) {
+                case ActionGrid::Teleport:
+                    OrderVisuals::Icon(draw, icon, iconSize, 8, t, a, true, tint | 0xFF000000u);
+                    break;
+                case ActionGrid::TemporaryRest:
+                    OrderVisuals::Icon(draw, icon, iconSize, 4, t, a * (.6F + .4F * on), true, tint | 0xFF000000u);
+                    break;
+                case ActionGrid::LootScout:
+                    OrderVisuals::Loot(draw, {icon.x, icon.y - box.h * .02F * std::sin(std::min(t, .5F) * 6.2832F)},
+                                       iconSize * .74F, h > .5F, a * (.55F + .35F * on));
+                    break;
+                case ActionGrid::CompanionControl:
+                    OrderVisuals::DrawGlyph(draw, icon, iconSize * .92F, OrderVisuals::Glyph::Target, t, tint);
+                    break;
+                case ActionGrid::HoldHands:
+                    OrderVisuals::DrawGlyph(draw, icon, iconSize, OrderVisuals::Glyph::Link, t,
+                                            Faded(tint, .6F + .4F * on));
+                    break;
+                case ActionGrid::Pathfinder:
+                    OrderVisuals::Icon(draw, icon, iconSize, 9, t, a * (.6F + .4F * on), true, tint | 0xFF000000u);
+                    break;
+                default:
+                    OrderVisuals::DrawGlyph(draw, icon, iconSize * .92F, OrderVisuals::Glyph::Power, t,
+                                            Faded(tint, .6F + .4F * on));
+                    break;
+                }
+                {
+                    Inscription font;
+                    const bool two = !lines[i][1].empty();
+                    const auto labelColor =
+                        Faded(Blend(IM_COL32(222, 215, 197, 255), IM_COL32(246, 234, 204, 255), h), a);
+                    CenteredText(draw, lines[i][0].c_str(), {icon.x, at.y + box.h * (two ? .585F : .63F)}, labelSize,
+                                 labelColor, box.w * .9F);
+                    if (two) {
+                        CenteredText(draw, lines[i][1].c_str(), {icon.x, at.y + box.h * .585F + labelSize * 1.05F},
+                                     labelSize, labelColor, box.w * .9F);
+                    }
+                }
+                CenteredText(draw, tile.caption.c_str(), {icon.x, at.y + box.h * .835F}, box.h * .066F,
+                             Faded(Blend(IM_COL32(150, 160, 157, 245), IM_COL32(214, 196, 142, 255), h * .6F), a),
+                             box.w * .88F);
+                if (tile.toggle) {
+                    // A small switch in the corner: yellow and to the right when on.
+                    const float tw = box.w * .17F, th = box.h * .085F;
+                    const V s{end.x - box.w * .065F - tw, at.y + box.h * .075F};
+                    Draw::AddRectFilled(draw, s, {s.x + tw, s.y + th},
+                                        Faded(Blend(IM_COL32(54, 62, 63, 255), IM_COL32(224, 182, 62, 255), on), a),
+                                        th * .5F, 0);
+                    Draw::AddCircleFilled(draw, {s.x + th * .5F + (tw - th) * on, s.y + th * .5F}, th * .36F,
+                                          Faded(Blend(IM_COL32(182, 186, 178, 255), IM_COL32(40, 33, 14, 255), on), a),
+                                          20);
+                }
+            }
+            // The selection frame: yellow corner brackets gliding between tiles.
+            const auto first = ActionGrid::TileBox(0, w);
+            const float frameReveal = motion.Reveal(std::clamp(focus, 0, ActionGrid::count - 1));
+            const float fa = a0 * frameReveal * (tiles[std::clamp(focus, 0, ActionGrid::count - 1)].enabled ? 1.0F : .55F);
+            if (fa > .003F) {
+                const float pad = w * .009F, len = first.h * .13F;
+                const V p0{origin.x + w * motion.frameX - pad,
+                           origin.y + w * motion.frameY + lift - first.h * .03F - pad};
+                const V p1{p0.x + first.w + 2 * pad, p0.y + first.h + 2 * pad};
+                const auto color = IM_COL32(246, 206, 86, 235 * fa);
+                const float thick = std::max(2.0F, w * .0035F);
+                for (int corner = 0; corner < 4; ++corner) {
+                    const float cx = corner & 1 ? p1.x : p0.x, cy = corner & 2 ? p1.y : p0.y;
+                    const float sx = corner & 1 ? -1.0F : 1.0F, sy = corner & 2 ? -1.0F : 1.0F;
+                    Draw::AddLine(draw, {cx, cy}, {cx + sx * len, cy}, color, thick);
+                    Draw::AddLine(draw, {cx, cy}, {cx, cy + sy * len}, color, thick);
+                }
+            }
+            if (focus >= 0 && focus < ActionGrid::count) {
+                CenteredText(draw, details[focus], {origin.x + w * .5F, origin.y + w * 1.0F + lift}, w * .02F,
+                             IM_COL32(186, 184, 172, 255 * a0), w * .88F);
+            }
+            return clicked;
+        }
+        // ACTION_GRID_END
+        void ToggleGuidance(FormationController& c)
+        {
+            auto value = c.Snapshot().settings;
+            value.enabled = !c.IsEnabled();
+            if (c.ApplyPreferences(value)) {
+                Engine::Notify(value.enabled ? "Walk With Me enabled" : "Walk With Me disabled");
+            }
+            else {
+                Engine::Notify("Walk With Me could not save the enable setting");
+            }
+        }
+        void ToggleHandHolding(FormationController& c)
+        {
+            auto value = c.Snapshot().settings;
+            auto& hands = value.handHolding;
+            if (!hands.enabled && hands.partner.empty()) {
+                Engine::Notify("Choose a hand-holding companion in Travel settings first");
+                return;
+            }
+            hands.enabled = !hands.enabled;
+            if (!c.ApplyPreferences(value)) {
+                Engine::Notify("Walk With Me could not save the hand-holding setting");
+            }
+            else if (!hands.enabled) {
+                Engine::Notify("Hand holding off");
+            }
+            else {
+                Engine::Notify(c.Snapshot().mode == FormationMode::kCompanion
+                                   ? "Hand holding on"
+                                   : "Hand holding on; it starts in Companion mode");
+            }
+        }
+        void ToggleLootScouting(FormationController& c)
+        {
+            auto value = c.Snapshot().settings;
+            value.loot.enabled = !value.loot.enabled;
+            if (!c.ApplyPreferences(value)) {
+                Engine::Notify("Walk With Me could not save the loot scouting setting");
+            }
+            else {
+                Engine::Notify(value.loot.enabled ? "Loot scouting on" : "Loot scouting off");
+            }
+        }
+        void TogglePathfinder(FormationController& c)
+        {
+            auto value = c.Snapshot().settings;
+            value.pathfinder.enabled = !value.pathfinder.enabled;
+            if (!c.ApplyPreferences(value)) {
+                Engine::Notify("Walk With Me could not save the pathfinder setting");
+            }
+            else {
+                Engine::Notify(value.pathfinder.enabled ? "Pathfinder on" : "Pathfinder off");
+            }
+        }
         void __stdcall RenderCommands()
         {
             if (!commandWindow || !commandWindow->IsOpen) {
@@ -1578,11 +2043,21 @@ namespace Wayfarer::Menu
             static Wheel::Motion motion;
             static int focus = 0, lastFocus = -1, pressed = -1;
             static Wheel::Stick stick;
-            static std::array<float, 2> utilityHover{}, utilityToggle{};
-            static std::array<CompanionMenu::ButtonMotion, 2> dockMotion{};
+            static bool gridPage = false;
+            static int tileFocus = 0;
+            static ActionGrid::Motion grid;
+            static ActionGrid::StickSteps gridStick;
+            static bool wheelStickLocked = false; // Until the stick recentres after leaving the grid.
+            static std::array<float, 2> barHover{};
             const auto display = Im::GetIO()->DisplaySize;
             const float w = Wheel::Width(display.x, display.y);
             const float dt = std::min(Im::GetIO()->DeltaTime, .05F);
+            const auto& hands = view.settings.handHolding;
+            const auto& loot = view.settings.loot;
+            const std::array<bool, ActionGrid::count> on{false,         view.settings.sandbox.automatic,
+                                                         false,         view.enabled,
+                                                         hands.enabled, loot.enabled,
+                                                         view.settings.pathfinder.enabled};
             Im::SetNextWindowPos({display.x * .5F, display.y * .5F}, Im::ImGuiCond_Always, {.5F, .5F});
             Im::SetNextWindowSize({w, w * Wheel::windowHeight}, Im::ImGuiCond_Always);
             bool open = true;
@@ -1591,7 +2066,8 @@ namespace Wayfarer::Menu
             if (Im::Begin("WalkWithMeOrders", &open,
                           Im::ImGuiWindowFlags_NoTitleBar | Im::ImGuiWindowFlags_NoResize |
                               Im::ImGuiWindowFlags_NoMove | Im::ImGuiWindowFlags_NoScrollbar |
-                              Im::ImGuiWindowFlags_NoSavedSettings | Im::ImGuiWindowFlags_NoNav)) {
+                              Im::ImGuiWindowFlags_NoScrollWithMouse | Im::ImGuiWindowFlags_NoSavedSettings |
+                              Im::ImGuiWindowFlags_NoNav)) {
                 if (Im::IsWindowAppearing()) {
                     elapsed = 0;
                     focus = std::clamp(static_cast<int>(view.mode), 0, Wheel::count - 1);
@@ -1600,13 +2076,18 @@ namespace Wayfarer::Menu
                     stick = {};
                     padConfirm = false;
                     padCancel = false;
-                    padStep = 0;
+                    padDx = 0;
+                    padDy = 0;
+                    gridBack = false;
                     motion.Open(focus);
                     wheelPackageActor = view.crosshairActor;
                     packageShortcut = false;
-                    dockMotion = {};
-                    utilityHover = {};
-                    utilityToggle = {0, view.settings.sandbox.automatic ? 1.0F : 0.0F};
+                    gridPage = false;
+                    tileFocus = 0;
+                    grid.Reset(tileFocus, false, on);
+                    gridStick = {};
+                    wheelStickLocked = false;
+                    barHover = {};
                 }
                 if (wheelCloseRequested.load()) {
                     motion.Close();
@@ -1615,209 +2096,340 @@ namespace Wayfarer::Menu
                 centerElapsed += dt;
                 const auto origin = Im::GetWindowPos();
                 auto* draw = Im::GetWindowDrawList();
-                const V center{origin.x + w * .5F, origin.y + w * .48F};
+                const V wheelCenter{origin.x + w * .5F, origin.y + w * .48F};
                 const float hitRadius = w * .40F;
                 auto* backdrop = Im::GetBackgroundDrawList();
                 const auto mouse = Im::GetIO()->MousePos;
-                int over = Wheel::Mouse(mouse.x - center.x, mouse.y - center.y, hitRadius);
-                Im::BeginDisabled(motion.closing);
-
-                Im::SetCursorScreenPos({origin.x, origin.y + w * .04F});
-                const bool clicked = Im::InvisibleButton("wheel-hit", {w, w * .87F});
-                const bool activated = Im::IsItemActivated();
-                if (!Im::IsItemHovered()) {
-                    over = -1;
-                }
-                if (activated) {
-                    pressed = over;
-                }
-                int choice = clicked && pressed >= 0 && pressed == over ? over : -1;
-                if (!Im::IsItemActive()) {
-                    pressed = -1;
-                }
                 const bool mouseMoved =
                     std::abs(Im::GetIO()->MouseDelta.x) + std::abs(Im::GetIO()->MouseDelta.y) > .5F;
-                int step = padStep.exchange(0);
-                if (Im::IsKeyPressed(Im::ImGuiKey_RightArrow) || Im::IsKeyPressed(Im::ImGuiKey_DownArrow)) {
-                    ++step;
-                }
-                if (Im::IsKeyPressed(Im::ImGuiKey_LeftArrow) || Im::IsKeyPressed(Im::ImGuiKey_UpArrow)) {
-                    --step;
-                }
-                if (step) {
-                    focus = Wheel::clockwise[(Wheel::slots[focus] + (step > 0 ? 1 : Wheel::count - 1)) %
-                                             Wheel::count];
-                }
-                if (padStickAt.load() && GetTickCount64() - padStickAt.load() < 350) {
-                    focus = stick.Update(padX.load(), padY.load(), focus);
+                Im::BeginDisabled(motion.closing);
+
+                // Page changes: D-pad or arrows, Tab, the mouse wheel, or the bars themselves.
+                const int dx = padDx.exchange(0), dy = padDy.exchange(0);
+                const bool tab = Im::IsKeyPressed(Im::ImGuiKey_Tab, false);
+                const float scroll = Im::GetIO()->MouseWheel;
+                const bool back = padCancel.exchange(false) || Im::IsKeyPressed(Im::ImGuiKey_Escape, false) ||
+                                  gridBack.exchange(false);
+                bool confirm = padConfirm.exchange(false) || Im::IsKeyPressed(Im::ImGuiKey_Enter, false);
+                bool toGrid = false, toWheel = false;
+                int choice = -1, tileChoice = -1;
+                if (!gridPage) {
+                    int over = Wheel::Mouse(mouse.x - wheelCenter.x, mouse.y - wheelCenter.y, hitRadius);
+                    Im::SetCursorScreenPos({origin.x, origin.y + w * .04F});
+                    const bool clicked = Im::InvisibleButton("wheel-hit", {w, w * .87F});
+                    const bool activated = Im::IsItemActivated();
+                    if (!Im::IsItemHovered()) {
+                        over = -1;
+                    }
+                    if (activated) {
+                        pressed = over;
+                    }
+                    choice = clicked && pressed >= 0 && pressed == over ? over : -1;
+                    if (!Im::IsItemActive()) {
+                        pressed = -1;
+                    }
+                    int step = dx;
+                    if (Im::IsKeyPressed(Im::ImGuiKey_RightArrow)) {
+                        ++step;
+                    }
+                    if (Im::IsKeyPressed(Im::ImGuiKey_LeftArrow)) {
+                        --step;
+                    }
+                    if (step) {
+                        focus = Wheel::clockwise[(Wheel::slots[focus] + (step > 0 ? 1 : Wheel::count - 1)) %
+                                                 Wheel::count];
+                    }
+                    const bool stickLive = padStickAt.load() && GetTickCount64() - padStickAt.load() < 350;
+                    if (stickLive && wheelStickLocked && std::hypot(padX.load(), padY.load()) < .22F) {
+                        wheelStickLocked = false;
+                    }
+                    if (stickLive && !wheelStickLocked) {
+                        focus = stick.Update(padX.load(), padY.load(), focus);
+                    }
+                    else {
+                        stick.engaged = false;
+                    }
+                    if (over >= 0 && (mouseMoved || activated)) {
+                        focus = over;
+                    }
+                    if (confirm) {
+                        choice = focus;
+                    }
+                    for (int i = 0; i < Wheel::count; ++i) {
+                        if (Im::IsKeyPressed(static_cast<Im::ImGuiKey>(Im::ImGuiKey_1 + i), false)) {
+                            choice = i;
+                        }
+                    }
+                    toGrid = dy > 0 || Im::IsKeyPressed(Im::ImGuiKey_DownArrow) || tab || scroll < 0;
+                    if (back) {
+                        open = false;
+                    }
                 }
                 else {
-                    stick.engaged = false;
-                }
-                if (over >= 0 && (mouseMoved || activated)) {
-                    focus = over;
+                    int mx = dx, my = dy;
+                    mx += Im::IsKeyPressed(Im::ImGuiKey_RightArrow) - Im::IsKeyPressed(Im::ImGuiKey_LeftArrow);
+                    my += Im::IsKeyPressed(Im::ImGuiKey_DownArrow) - Im::IsKeyPressed(Im::ImGuiKey_UpArrow);
+                    // The right stick steps through the tiles like the D-pad.
+                    const bool stickLive = padStickAt.load() && GetTickCount64() - padStickAt.load() < 350;
+                    const auto push = gridStick.Update(stickLive ? padX.load() : 0, stickLive ? padY.load() : 0, dt);
+                    mx += push[0];
+                    my += push[1];
+                    if (mx || my) {
+                        const int next = ActionGrid::Move(tileFocus, mx, my);
+                        if (next < 0) {
+                            toWheel = true;
+                        }
+                        else {
+                            tileFocus = next;
+                        }
+                    }
+                    if (confirm) {
+                        tileChoice = tileFocus;
+                    }
+                    for (int i = 0; i < ActionGrid::count; ++i) {
+                        if (Im::IsKeyPressed(static_cast<Im::ImGuiKey>(Im::ImGuiKey_1 + i), false)) {
+                            tileChoice = i;
+                        }
+                    }
+                    toWheel = toWheel || back || tab || scroll > 0;
                 }
                 if (focus != lastFocus) {
                     lastFocus = focus;
                     centerElapsed = 0;
                 }
-                motion.Update(dt, focus);
-                const float fade = motion.visibility;
-                const float radius = hitRadius * motion.Scale();
-                Draw::AddRectFilled(backdrop, {0, 0}, display, IM_COL32(7, 12, 16, 165 * fade), 0, 0);
-                // WHEEL_DRAW_BEGIN: shared with the offline visual proof.
-                auto text = [&](const char* value, V at, float size, Im::ImU32 color, float width) {
-                    auto bounds = Im::CalcTextSize(value);
-                    size = std::min(size, width * Im::GetFontSize() / std::max(bounds.x, 1.0F));
-                    color =
-                        (color & 0x00FFFFFFu) | (static_cast<Im::ImU32>(((color >> 24) & 255) * fade) << 24);
-                    Draw::AddText(draw, Im::GetFont(), size,
-                                  {at.x - bounds.x * size / Im::GetFontSize() * .5F, at.y}, color, value);
-                };
-                text("W A L K   W I T H   M E", {center.x, origin.y + w * .005F}, w * .025F, gold, w * .8F);
-                text("P A R T Y   O R D E R S", {center.x, origin.y + w * .042F}, w * .017F, muted, w * .8F);
-                Draw::AddLine(draw, {center.x - w * .29F, origin.y + w * .018F},
-                              {center.x - w * .20F, origin.y + w * .018F}, IM_COL32(180, 163, 127, 65 * fade),
-                              1);
-                Draw::AddLine(draw, {center.x + w * .20F, origin.y + w * .018F},
-                              {center.x + w * .29F, origin.y + w * .018F}, IM_COL32(180, 163, 127, 65 * fade),
-                              1);
-                for (int layer = 4; layer > 0; --layer) {
-                    Draw::AddCircleFilled(draw, center, radius + layer * w * .008F,
-                                          IM_COL32(0, 0, 0, 8 * fade), 128);
-                }
-                Draw::AddCircle(draw, center, radius * 1.023F, IM_COL32(170, 153, 115, 45 * fade), 128, 1);
-                for (int mode = 0; mode < Wheel::count; ++mode) {
-                    const float a = Wheel::Angle(mode);
-                    const float light = motion.highlight[mode];
-                    const float reveal = Wheel::EaseOut((elapsed - Wheel::slots[mode] * .018F) / .25F);
-                    const auto fill = IM_COL32(25 + 37 * light, 32 + 29 * light, 36 + 14 * light,
-                                               (230 + 15 * light) * fade * reveal);
-                    auto point = [&](float angle, float r) {
-                        return V{center.x + std::cos(angle) * r, center.y + std::sin(angle) * r};
-                    };
-                    const auto sliceCenter = point(a, w * .006F * light);
-                    OrderVisuals::Sector(draw, sliceCenter, radius * (.975F + .025F * reveal), mode, fill);
-                    Draw::PathArcTo(draw, sliceCenter, radius * .98F, a - Wheel::pi / 6 + .065F,
-                                    a + Wheel::pi / 6 - .065F, 24);
-                    Draw::PathStroke(draw, IM_COL32(218, 191, 133, (25 + 145 * light) * fade * reveal), 0,
-                                     1 + light);
-                    V at = point(a, radius * .755F);
-                    at.y -= w * .018F;
-                    at.y -= w * .004F * light;
-                    OrderVisuals::Icon(draw, at, w * (.088F + .008F * light), mode, elapsed,
-                                       fade * reveal * (view.enabled ? .68F + .32F * light : .4F));
-                    text(profileNames[mode], {at.x, at.y + w * .062F}, w * .025F,
-                         IM_COL32(155 + 67 * light, 156 + 63 * light, 149 + 58 * light, 255 * reveal),
-                         w * .20F);
-                    if (mode == static_cast<int>(view.mode)) {
-                        Draw::AddCircleFilled(draw, point(a, radius * .555F), w * .003F,
-                                              IM_COL32(228, 203, 152, 220 * fade), 16);
-                    }
-                }
-                Draw::AddCircle(draw, center, radius * .445F + 1, IM_COL32(20, 28, 29, 45 * fade), 96, 3);
-                Draw::AddCircleFilled(draw, center, radius * .445F, IM_COL32(20, 28, 29, 242 * fade), 96);
-                Draw::AddCircle(draw, center, radius * .445F, IM_COL32(166, 151, 114, 70 * fade), 64, 1);
-                Draw::PathArcTo(draw, center, radius * .462F, motion.angle - .30F, motion.angle + .30F, 28);
-                Draw::PathStroke(draw, IM_COL32(229, 200, 143, 220 * fade), 0, 2);
-                constexpr const char* captions[]{"Find your own pace",      "Take the road ahead",
-                                                 "Stay by my side",         "Watch our backs",
-                                                 "Make yourselves at home", "Return to follower AI"};
-                for (int i = 0; i < Wheel::count; ++i) {
-                    const float weight = motion.centerWeight[i];
-                    if (weight < .005F) {
-                        continue;
-                    }
-                    const float lift = w * .007F * (1 - weight);
-                    OrderVisuals::Icon(draw, {center.x, center.y - w * .060F + lift}, w * .105F, i,
-                                       i == focus ? centerElapsed : 3.0F, fade * weight);
-                    {
-                        Inscription font;
-                        text(profileNames[i], {center.x, center.y + w * .018F + lift}, w * .037F,
-                             IM_COL32(235, 225, 203, 255 * weight), w * .32F);
-                    }
-                    text(captions[i], {center.x, center.y + w * .070F + lift}, w * .020F,
-                         IM_COL32(164, 168, 165, 255 * weight), w * .33F);
-                }
-                // WHEEL_DRAW_END
-                if (padConfirm.exchange(false) || Im::IsKeyPressed(Im::ImGuiKey_Enter, false)) {
-                    choice = focus;
-                }
-                for (int i = 0; i < Wheel::count; ++i) {
-                    if (Im::IsKeyPressed(static_cast<Im::ImGuiKey>(Im::ImGuiKey_1 + i), false)) {
-                        choice = i;
-                    }
-                }
-                const bool cancel = padCancel.exchange(false) || Im::IsKeyPressed(Im::ImGuiKey_Escape, false);
-                if (cancel) {
-                    open = false;
-                }
-                else if (!motion.closing && choice >= 0 && view.inGame && view.enabled) {
-                    focus = choice;
-                    IssueStyle(OrderMode(choice));
-                }
-                const char* hints = padUsed.load()
-                                        ? "Stick: aim   A: order   X: companion control   B: back"
-                                        : "Click / 1-6: order    C: companion control    Esc: back";
-                const std::string status =
-                    !view.inGame ? "Available in game"
-                    : !view.enabled
-                        ? "Walk With Me is disabled"
-                        : fmt::format(
-                              "ACTIVE ORDER  /  {}",
-                              profileNames[std::clamp(static_cast<int>(view.mode), 0, Wheel::count - 1)]);
-                const auto teleport = Wheel::UtilityBox(0, w), relax = Wheel::UtilityBox(1, w);
+
+                // Tiles, as they stand this frame.
+                std::array<GridTile, ActionGrid::count> tiles;
                 const std::string recallCaption = view.recallPending ? "Teleport queued"
                                                   : !view.recallReason.empty()
                                                       ? view.recallReason
                                                       : fmt::format("{} companion{} ready", view.recallCount,
                                                                     view.recallCount == 1 ? "" : "s");
-                if (OrderUtilityCard("party-teleport", {origin.x + teleport.x, origin.y + teleport.y},
-                                     {teleport.w, teleport.h}, 0,
-                                     view.inGame && view.recallReason.empty() && !view.recallPending, false,
-                                     recallCaption.c_str(), elapsed, fade, utilityHover[0],
-                                     utilityToggle[0])) {
-                    const auto stamp = view.generation;
-                    Queue([stamp](auto& c) { c.RequestPartyRecall(stamp); });
-                    SetWheelOpen(false);
-                }
-                Help("Mouse: summon eligible travelling companions to clear ground nearby, including from "
-                     "other cells. Waiting or scripted companions stay put.");
-                const bool restOn = view.settings.sandbox.automatic;
-                if (OrderUtilityCard("temporary-relaxation", {origin.x + relax.x, origin.y + relax.y},
-                                     {relax.w, relax.h}, 1, view.inGame && !temporaryRestSaving.load(),
-                                     restOn,
-                                     temporaryRestSaving ? "Saving..."
-                                     : restOn            ? "ON - rest when you stop"
-                                                         : "OFF - keep travelling",
-                                     elapsed, fade, utilityHover[1], utilityToggle[1])) {
-                    if (!temporaryRestSaving.exchange(true)) {
-                        const auto stamp = view.generation;
-                        Queue([stamp](auto& c) {
-                            c.ToggleTemporaryRelaxation(stamp);
-                            temporaryRestSaving = false;
-                        });
+                const bool saving = toggleSaving.load();
+                tiles[ActionGrid::Teleport] = {"Teleport party", recallCaption,
+                                               view.inGame && view.recallReason.empty() && !view.recallPending};
+                tiles[ActionGrid::TemporaryRest] = {"Temporary rest",
+                                                    saving           ? "Saving..."
+                                                    : on[ActionGrid::TemporaryRest] ? "Settle when you stop"
+                                                                                     : "Keep to your feet",
+                                                    view.inGame && !saving, true, on[ActionGrid::TemporaryRest]};
+                std::string target;
+                for (const auto& row : view.packageTargets) {
+                    if (row.id == wheelPackageActor) {
+                        target = row.name;
                     }
                 }
-                Help("Mouse: toggle automatic relaxation during travel. Saves immediately; the manual Relax "
-                     "order stays available.");
-                text(status.c_str(), {center.x, origin.y + w * 1.09F}, w * .019F, gold, w * .8F);
-                text(hints, {center.x, origin.y + w * 1.235F}, w * .017F, muted, w * .95F);
-                const float dockFade = fade * Wheel::EaseOut((elapsed - .16F) / .26F);
-                const bool control =
-                    OrnamentButton("companion-control", "Companion control", padUsed.load() ? "X" : "C",
-                                   {origin.x + w * .07F, origin.y + w * 1.14F}, {w * .54F, w * .072F},
-                                   dockFade, dockMotion[0]) ||
-                    packageShortcut.exchange(false) || Im::IsKeyPressed(Im::ImGuiKey_C, false);
+                tiles[ActionGrid::CompanionControl] = {"Companion control",
+                                                       target.empty() ? "Look at a companion" : target,
+                                                       view.inGame && !target.empty()};
+                tiles[ActionGrid::Guidance] = {"Walk With Me", on[ActionGrid::Guidance] ? "Guiding" : "Follower AI",
+                                               view.inGame && !saving, true, on[ActionGrid::Guidance]};
+                const std::string partner = hands.partnerName.empty() ? "your partner" : hands.partnerName;
+                tiles[ActionGrid::HoldHands] = {
+                    "Hold hands",
+                    hands.partner.empty()                    ? "Choose a partner"
+                    : view.mode == FormationMode::kCompanion ? "With " + partner
+                                                             : "In Companion",
+                    view.inGame && !saving && (!hands.partner.empty() || hands.enabled), true, on[ActionGrid::HoldHands]};
+                tiles[ActionGrid::LootScout] = {"Loot scouting",
+                                                loot.finderName.empty() ? "Any companion" : loot.finderName,
+                                                view.inGame && !saving, true, on[ActionGrid::LootScout]};
+                const auto& path = view.settings.pathfinder;
+                const bool pathStyle = view.mode == FormationMode::kDynamic || view.mode == FormationMode::kLead ||
+                                       view.mode == FormationMode::kCustom ||
+                                       view.mode == FormationMode::kCompanion;
+                tiles[ActionGrid::Pathfinder] = {"Pathfinder",
+                                                 !pathStyle                  ? "Not in this style"
+                                                 : path.companionName.empty() ? "Curious first"
+                                                                              : path.companionName,
+                                                 view.inGame && !saving, true, on[ActionGrid::Pathfinder]};
+
+                if (toGrid && !motion.closing) {
+                    gridPage = true;
+                    gridStick.Lock();
+                }
+                else if (toWheel && !motion.closing) {
+                    gridPage = false;
+                    wheelStickLocked = true;
+                    stick.engaged = false;
+                }
+                gridBackEnabled = gridPage;
+                motion.Update(dt, focus);
+                grid.Update(dt, gridPage, tileFocus, on);
+                const float windowFade = motion.visibility;
+                const float page = grid.page;
+                Draw::AddRectFilled(backdrop, {0, 0}, display, IM_COL32(7, 12, 16, 165 * windowFade), 0, 0);
+                PartyHeader(draw, origin, w, windowFade, page);
+
+                const bool customReady = view.settings.customFormation.Defined();
+                const auto orderNames = OrderNames(view);
+                if (grid.WheelVisibility() > .001F) {
+                    // The wheel lifts away as the grid rises in.
+                    const float fade = motion.visibility * grid.WheelVisibility();
+                    const float radius = hitRadius * motion.Scale();
+                    const V center{wheelCenter.x, wheelCenter.y - w * .05F * page};
+                    // WHEEL_DRAW_BEGIN: shared with the offline visual proof.
+                    auto text = [&](const char* value, V at, float size, Im::ImU32 color, float width) {
+                        CenteredText(draw, value, at, size, Faded(color, fade), width);
+                    };
+                    for (int layer = 4; layer > 0; --layer) {
+                        Draw::AddCircleFilled(draw, center, radius + layer * w * .008F,
+                                              IM_COL32(0, 0, 0, 8 * fade), 128);
+                    }
+                    Draw::AddCircle(draw, center, radius * 1.023F, IM_COL32(170, 153, 115, 45 * fade), 128, 1);
+                    for (int mode = 0; mode < Wheel::count; ++mode) {
+                        const float a = Wheel::Angle(mode);
+                        const float light = motion.highlight[mode];
+                        const float dim = mode == 6 && !customReady ? .42F : 1.0F;
+                        const float reveal = Wheel::EaseOut((elapsed - Wheel::slots[mode] * .018F) / .25F);
+                        const auto fill = IM_COL32(25 + 37 * light, 32 + 29 * light, 36 + 14 * light,
+                                                   (230 + 15 * light) * fade * reveal);
+                        auto point = [&](float angle, float r) {
+                            return V{center.x + std::cos(angle) * r, center.y + std::sin(angle) * r};
+                        };
+                        const auto sliceCenter = point(a, w * .006F * light);
+                        OrderVisuals::Sector(draw, sliceCenter, radius * (.975F + .025F * reveal), mode, fill);
+                        Draw::PathArcTo(draw, sliceCenter, radius * .98F, a - Wheel::pi / 6 + .065F,
+                                        a + Wheel::pi / 6 - .065F, 24);
+                        Draw::PathStroke(draw, IM_COL32(218, 191, 133, (25 + 145 * light) * fade * reveal), 0,
+                                         1 + light);
+                        V at = point(a, radius * .755F);
+                        at.y -= w * .018F;
+                        at.y -= w * .004F * light;
+                        OrderVisuals::Icon(draw, at, w * (.088F + .008F * light), mode, elapsed,
+                                           fade * reveal * dim * (view.enabled ? .68F + .32F * light : .4F));
+                        text(orderNames[mode], {at.x, at.y + w * .062F}, w * .025F,
+                             IM_COL32(155 + 67 * light, 156 + 63 * light, 149 + 58 * light, 255 * reveal * dim),
+                             w * .20F);
+                        if (mode == static_cast<int>(view.mode)) {
+                            Draw::AddCircleFilled(draw, point(a, radius * .555F), w * .003F,
+                                                  IM_COL32(228, 203, 152, 220 * fade), 16);
+                        }
+                    }
+                    Draw::AddCircle(draw, center, radius * .445F + 1, IM_COL32(20, 28, 29, 45 * fade), 96, 3);
+                    Draw::AddCircleFilled(draw, center, radius * .445F, IM_COL32(20, 28, 29, 242 * fade), 96);
+                    Draw::AddCircle(draw, center, radius * .445F, IM_COL32(166, 151, 114, 70 * fade), 64, 1);
+                    Draw::PathArcTo(draw, center, radius * .462F, motion.angle - .30F, motion.angle + .30F, 28);
+                    Draw::PathStroke(draw, IM_COL32(229, 200, 143, 220 * fade), 0, 2);
+                    constexpr const char* captions[]{"Find your own pace",      "Take the road ahead",
+                                                     "Stay by my side",         "Watch our backs",
+                                                     "Make yourselves at home", "Return to follower AI",
+                                                     "Walk as I drew it"};
+                    for (int i = 0; i < Wheel::count; ++i) {
+                        const float weight = motion.centerWeight[i];
+                        if (weight < .005F) {
+                            continue;
+                        }
+                        const float lift = w * .007F * (1 - weight);
+                        const float dim = i == 6 && !customReady ? .42F : 1.0F;
+                        OrderVisuals::Icon(draw, {center.x, center.y - w * .060F + lift}, w * .105F, i,
+                                           i == focus ? centerElapsed : 3.0F, fade * weight * dim);
+                        {
+                            Inscription font;
+                            text(orderNames[i], {center.x, center.y + w * .018F + lift}, w * .037F,
+                                 IM_COL32(235, 225, 203, 255 * weight), w * .32F);
+                        }
+                        text(i == 6 && !customReady ? "Draw one in Travel settings" : captions[i],
+                             {center.x, center.y + w * .070F + lift}, w * .020F,
+                             IM_COL32(164, 168, 165, 255 * weight), w * .33F);
+                    }
+                    const std::string status =
+                        !view.inGame ? "Available in game"
+                        : !view.enabled
+                            ? "Walk With Me is disabled"
+                            : fmt::format(
+                                  "ACTIVE ORDER  /  {}",
+                                  orderNames[std::clamp(static_cast<int>(view.mode), 0, Wheel::count - 1)]);
+                    text(status.c_str(), {center.x, origin.y + w * .955F - w * .05F * page}, w * .019F, gold, w * .8F);
+                    // WHEEL_DRAW_END
+                }
+                if (!gridPage) {
+                    const auto bar = ActionGrid::MoreBar(w);
+                    if (PageBar("more", {origin.x + bar.x, origin.y + bar.y - w * .05F * page}, {bar.w, bar.h}, true,
+                                "P A R T Y   A C T I O N S", windowFade * grid.WheelVisibility(), elapsed, barHover[0])) {
+                        gridPage = true;
+                    }
+                }
+                if (page > .005F || gridPage) {
+                    int hovered = -1;
+                    const int clicked = ActionGridPage(origin, w, tiles, tileFocus, grid, windowFade * grid.GridVisibility(), gridPage, hovered);
+                    if (gridPage && hovered >= 0 && mouseMoved) {
+                        tileFocus = hovered;
+                    }
+                    if (clicked >= 0) {
+                        tileChoice = clicked;
+                    }
+                    if (gridPage) {
+                        const auto bar = ActionGrid::BackBar(w);
+                        if (PageBar("back", {origin.x + bar.x, origin.y + bar.y + w * .05F * (1 - page)},
+                                    {bar.w, bar.h}, false, "P A R T Y   O R D E R S", windowFade * grid.GridVisibility(), elapsed,
+                                    barHover[1])) {
+                            gridPage = false;
+                        }
+                    }
+                }
+
+                if (!motion.closing && choice >= 0 && view.inGame && view.enabled) {
+                    focus = choice;
+                    if (OrderMode(choice) == FormationMode::kCustom && !customReady) {
+                        Engine::Notify("Draw a custom formation in Travel settings first");
+                    }
+                    else {
+                        IssueStyle(OrderMode(choice));
+                    }
+                }
+                if (!motion.closing && tileChoice >= 0 && tiles[tileChoice].enabled) {
+                    tileFocus = tileChoice;
+                    grid.Press(tileChoice);
+                    const auto stamp = view.generation;
+                    switch (tileChoice) {
+                    case ActionGrid::Teleport:
+                        Queue([stamp](auto& c) { c.RequestPartyRecall(stamp); });
+                        SetWheelOpen(false);
+                        break;
+                    case ActionGrid::CompanionControl:
+                        OpenPackageControl(view, wheelPackageActor);
+                        break;
+                    default:
+                        if (!toggleSaving.exchange(true)) {
+                            const int which = tileChoice;
+                            Queue([stamp, which](auto& c) {
+                                if (c.Snapshot().generation == stamp) {
+                                    if (which == ActionGrid::TemporaryRest) {
+                                        c.ToggleTemporaryRelaxation(stamp);
+                                    }
+                                    else if (which == ActionGrid::HoldHands) {
+                                        ToggleHandHolding(c);
+                                    }
+                                    else if (which == ActionGrid::LootScout) {
+                                        ToggleLootScouting(c);
+                                    }
+                                    else if (which == ActionGrid::Pathfinder) {
+                                        TogglePathfinder(c);
+                                    }
+                                    else {
+                                        ToggleGuidance(c);
+                                    }
+                                }
+                                toggleSaving = false;
+                            });
+                        }
+                        break;
+                    }
+                }
+                const bool control = packageShortcut.exchange(false) || Im::IsKeyPressed(Im::ImGuiKey_C, false);
                 if (control && !motion.closing) {
                     OpenPackageControl(view, wheelPackageActor);
                 }
-                Help("Open custom companion control (C / gamepad X).");
-                if (OrnamentButton("wheel-return", "Return", padUsed.load() ? "B" : "Esc",
-                                   {origin.x + w * .63F, origin.y + w * 1.14F}, {w * .30F, w * .072F},
-                                   fade * Wheel::EaseOut((elapsed - .21F) / .26F), dockMotion[1])) {
-                    open = false;
-                }
+                const bool pad = padUsed.load();
+                const char* wheelHints = pad ? "Stick: aim    A: order    D-pad down: party actions    B: back"
+                                             : "Click / 1-7: order    Tab: party actions    Esc: back";
+                const char* gridHints = pad ? "Stick / D-pad: choose    A: select    Up: party orders    B: back"
+                                            : "Click / arrows: choose    Enter: select    Tab: party orders    Esc: back";
+                CenteredText(draw, wheelHints, {wheelCenter.x, origin.y + w * 1.235F}, w * .017F,
+                             Faded(muted, windowFade * grid.WheelVisibility()), w * .95F);
+                CenteredText(draw, gridHints, {wheelCenter.x, origin.y + w * 1.235F}, w * .017F,
+                             Faded(muted, windowFade * grid.GridVisibility()), w * .95F);
                 Im::EndDisabled();
             }
             Im::End();
@@ -1829,21 +2441,494 @@ namespace Wayfarer::Menu
             if (motion.Finished()) {
                 commandWindow->IsOpen = false;
                 wheelCloseRequested = false;
+                gridBackEnabled = false;
                 QueueWheelBlur();
             }
+        }
+        // FORMATION_EDITOR_BEGIN: shared with the offline visual proof.
+        struct EditorCompanion
+        {
+            std::string key, name;
+        };
+        struct FormationEditorState
+        {
+            Custom::Formation draft, saved;
+            int selected{-1}, dragging{-1};
+            bool snap{true};
+            float elapsed{}, appear{};
+            std::array<float, PARTY_CAPACITY> pop{};
+            void Open(const Custom::Formation& current)
+            {
+                draft = saved = current;
+                selected = current.count ? 0 : -1;
+                dragging = -1;
+                elapsed = appear = 0;
+                pop.fill(1);
+            }
+        };
+        // A small flat button in the party menu's style; `primary` fills it yellow.
+        bool EditorButton(const char* id, const char* label, V at, V size, bool enabled, bool primary, float fade)
+        {
+            Im::SetCursorScreenPos(at);
+            Im::BeginDisabled(!enabled);
+            const bool clicked = Im::InvisibleButton(id, size);
+            const bool over = Im::IsItemHovered(), held = Im::IsItemActive();
+            Im::EndDisabled();
+            auto* draw = Im::GetWindowDrawList();
+            const float a = fade * (enabled ? 1.0F : .4F), h = over && enabled ? 1.0F : 0.0F;
+            const V top{at.x, at.y + (held ? 1.0F : 0.0F)}, end{top.x + size.x, top.y + size.y};
+            const float r = size.y * .2F;
+            const auto fill = primary ? Blend(IM_COL32(186, 146, 44, 255), IM_COL32(232, 190, 70, 255), h)
+                                      : Blend(IM_COL32(27, 35, 38, 250), IM_COL32(42, 50, 50, 252), h);
+            Draw::AddRectFilled(draw, top, end, Faded(fill, a), r, 0);
+            Draw::AddRect(draw, top, end,
+                          Faded(primary ? IM_COL32(250, 222, 132, 210) : IM_COL32(168, 153, 118, 70 + 110 * h), a), r, 0, 1);
+            const float fontSize = std::min(size.y * .46F, Im::GetFontSize());
+            CenteredText(draw, label, {top.x + size.x * .5F, top.y + (size.y - fontSize) * .5F}, fontSize,
+                         Faded(primary ? IM_COL32(34, 27, 8, 255) : IM_COL32(226, 218, 201, 255), a), size.x * .88F);
+            return clicked && enabled;
+        }
+        // The formation editor: a map seen from above, with you in the middle and the way ahead at
+        // the top, and a panel beside it. Returns 1 to save, 2 to save and travel in it, 3 to close.
+        int FormationEditor(V origin, V size, FormationEditorState& s, const std::vector<EditorCompanion>& party,
+                            float fade)
+        {
+            auto* draw = Im::GetWindowDrawList();
+            auto& f = s.draft;
+            const float dt = std::min(Im::GetIO()->DeltaTime, .05F);
+            s.elapsed += dt;
+            for (int i = 0; i < PARTY_CAPACITY; ++i) {
+                s.pop[i] = i < f.count ? Wheel::Follow(s.pop[i], 1, dt, 13) : 0;
+            }
+            int action = 0;
+            const float u = size.y;
+            const V end{origin.x + size.x, origin.y + size.y};
+            // The two stock widgets (the companion list and the snap box) wear the menu's colours.
+            struct WidgetStyle
+            {
+                WidgetStyle()
+                {
+                    Im::PushStyleColor(Im::ImGuiCol_FrameBg, IM_COL32(27, 35, 38, 250));
+                    Im::PushStyleColor(Im::ImGuiCol_FrameBgHovered, IM_COL32(42, 50, 50, 252));
+                    Im::PushStyleColor(Im::ImGuiCol_FrameBgActive, IM_COL32(58, 50, 24, 255));
+                    Im::PushStyleColor(Im::ImGuiCol_Button, IM_COL32(40, 47, 48, 255));
+                    Im::PushStyleColor(Im::ImGuiCol_ButtonHovered, IM_COL32(58, 50, 24, 255));
+                    Im::PushStyleColor(Im::ImGuiCol_PopupBg, IM_COL32(18, 25, 27, 250));
+                    Im::PushStyleColor(Im::ImGuiCol_Header, IM_COL32(58, 50, 24, 255));
+                    Im::PushStyleColor(Im::ImGuiCol_HeaderHovered, IM_COL32(74, 63, 28, 255));
+                    Im::PushStyleColor(Im::ImGuiCol_CheckMark, IM_COL32(240, 199, 74, 255));
+                    Im::PushStyleColor(Im::ImGuiCol_Text, IM_COL32(226, 218, 201, 255));
+                    Im::PushStyleColor(Im::ImGuiCol_Border, IM_COL32(168, 153, 118, 110));
+                    Im::PushStyleVar(Im::ImGuiStyleVar_FrameRounding, 4.0F);
+                    Im::PushStyleVar(Im::ImGuiStyleVar_FrameBorderSize, 1.0F);
+                }
+                ~WidgetStyle()
+                {
+                    Im::PopStyleVar(2);
+                    Im::PopStyleColor(11);
+                }
+            } widgetStyle;
+            Draw::AddRectFilled(draw, {origin.x, origin.y + u * .008F}, {end.x, end.y + u * .008F},
+                                IM_COL32(0, 0, 0, 70 * fade), u * .02F, 0);
+            Draw::AddRectFilled(draw, origin, end, IM_COL32(18, 25, 27, 246 * fade), u * .02F, 0);
+            Draw::AddRect(draw, origin, end, IM_COL32(166, 151, 114, 90 * fade), u * .02F, 0, 1);
+            CenteredText(draw, "W A L K   W I T H   M E", {origin.x + size.x * .5F, origin.y + u * .03F}, u * .024F,
+                         Faded(gold, fade), size.x * .6F);
+            {
+                // The formation's own name, spaced like the other headings.
+                std::string spaced;
+                for (const char ch : f.title) {
+                    if (!spaced.empty()) {
+                        spaced += ' ';
+                    }
+                    spaced += static_cast<char>(ch >= 'a' && ch <= 'z' ? ch - 32 : ch);
+                }
+                CenteredText(draw, spaced.c_str(), {origin.x + size.x * .5F, origin.y + u * .066F}, u * .019F,
+                             Faded(yellow, fade), size.x * .6F);
+            }
+
+            // The map.
+            const float mapSize = u * .80F;
+            const V mapOrigin{origin.x + u * .05F, origin.y + u * .135F};
+            const V centre{mapOrigin.x + mapSize * .5F, mapOrigin.y + mapSize * .5F};
+            const float radius = mapSize * .5F - u * .04F, scale = radius / Custom::reach;
+            auto toScreen = [&](FormationSlot p) {
+                return V{centre.x + p.lateral * scale, centre.y - p.longitudinal * scale};
+            };
+            auto toWorld = [&](V p) { return FormationSlot{(p.x - centre.x) / scale, (centre.y - p.y) / scale}; };
+            Draw::AddCircleFilled(draw, centre, radius + u * .012F, IM_COL32(23, 31, 34, 255 * fade), 96);
+            Draw::AddCircle(draw, centre, radius + u * .012F, IM_COL32(166, 151, 114, 60 * fade), 96, 1);
+            for (int ring = 1; ring <= 4; ++ring) {
+                const float r = radius * ring / 4.0F;
+                Draw::AddCircle(draw, centre, r, IM_COL32(180, 170, 140, (ring == 4 ? 34 : 22) * fade), 96, 1);
+                const auto label = std::to_string(ring * 2) + " m";
+                Draw::AddText(draw, Im::GetFont(), u * .017F, {centre.x + r * .72F + 3, centre.y + r * .69F},
+                              IM_COL32(150, 150, 140, 150 * fade), label.c_str());
+            }
+            Draw::AddLine(draw, {centre.x - radius, centre.y}, {centre.x + radius, centre.y},
+                          IM_COL32(180, 170, 140, 16 * fade), 1);
+            // The line of travel, its dashes drifting forward.
+            const float dash = u * .014F, gap = u * .014F, drift = std::fmod(s.elapsed * u * .03F, dash + gap);
+            for (float y = centre.y + radius - drift; y > centre.y - radius; y -= dash + gap) {
+                const float y1 = std::max(centre.y - radius, y - dash);
+                Draw::AddLine(draw, {centre.x, y}, {centre.x, y1}, IM_COL32(240, 199, 74, 46 * fade), 1);
+            }
+            CenteredText(draw, "A H E A D", {centre.x, mapOrigin.y - u * .004F}, u * .017F, Faded(yellow, fade * .85F),
+                         u * .3F);
+            CenteredText(draw, "B E H I N D", {centre.x, mapOrigin.y + mapSize - u * .022F}, u * .017F,
+                         Faded(muted, fade), u * .3F);
+            Draw::AddText(draw, Im::GetFont(), u * .017F, {mapOrigin.x - u * .01F, centre.y - u * .03F},
+                          Faded(muted, fade), "LEFT");
+            Draw::AddText(draw, Im::GetFont(), u * .017F, {mapOrigin.x + mapSize - u * .035F, centre.y - u * .03F},
+                          Faded(muted, fade), "RIGHT");
+            // Where nobody may stand: your own footprint.
+            Draw::AddCircleFilled(draw, centre, Custom::clearance * scale, IM_COL32(0, 0, 0, 55 * fade), 48);
+            Draw::AddCircleFilled(draw, centre, u * .016F, IM_COL32(226, 218, 201, 255 * fade), 28);
+            Draw::AddLine(draw, {centre.x - u * .014F, centre.y - u * .026F}, {centre.x, centre.y - u * .04F},
+                          IM_COL32(240, 199, 74, 230 * fade), 2);
+            Draw::AddLine(draw, {centre.x, centre.y - u * .04F}, {centre.x + u * .014F, centre.y - u * .026F},
+                          IM_COL32(240, 199, 74, 230 * fade), 2);
+            CenteredText(draw, "You", {centre.x, centre.y + u * .022F}, u * .018F, Faded(muted, fade), u * .1F);
+
+            // Mouse on the map: press to pick up a place (or put down a new one), drag, right-click
+            // to remove.
+            const auto mouse = Im::GetIO()->MousePos;
+            const float token = u * .024F;
+            auto under = [&](V p) {
+                int best = -1;
+                float bestDistance = token * 1.25F;
+                for (int i = 0; i < f.count; ++i) {
+                    const auto q = toScreen(f.slots[i]);
+                    const float d = std::hypot(q.x - p.x, q.y - p.y);
+                    if (d < bestDistance) {
+                        best = i;
+                        bestDistance = d;
+                    }
+                }
+                return best;
+            };
+            Im::SetCursorScreenPos(mapOrigin);
+            Im::InvisibleButton("map", {mapSize, mapSize});
+            const bool hovered = Im::IsItemHovered();
+            const bool inside = std::hypot(mouse.x - centre.x, mouse.y - centre.y) <= radius + token;
+            if (Im::IsItemActivated() && inside) {
+                const int hit = under(mouse);
+                if (hit >= 0) {
+                    s.selected = s.dragging = hit;
+                }
+                else if (Custom::Add(f, toWorld(mouse), s.snap)) {
+                    s.selected = s.dragging = f.count - 1;
+                    s.pop[s.selected] = .35F;
+                }
+            }
+            if (Im::IsItemActive() && s.dragging >= 0 && s.dragging < f.count) {
+                const auto moved = Custom::Constrain(toWorld(mouse), s.snap);
+                if (!Custom::Crowded(f, moved, s.dragging)) {
+                    f.slots[s.dragging] = moved;
+                }
+            }
+            else {
+                s.dragging = -1;
+            }
+            if (hovered && Im::IsMouseClicked(1)) {
+                if (const int hit = under(mouse); hit >= 0) {
+                    Custom::Remove(f, hit);
+                    s.selected = std::min(s.selected, f.count - 1);
+                }
+            }
+            if (s.selected >= 0 && s.selected < f.count && !Im::IsAnyItemActive()) {
+                if (Im::IsKeyPressed(Im::ImGuiKey_Delete, false)) {
+                    Custom::Remove(f, s.selected);
+                    s.selected = std::min(s.selected, f.count - 1);
+                }
+                else {
+                    const float nx = static_cast<float>(Im::IsKeyPressed(Im::ImGuiKey_RightArrow) -
+                                                        Im::IsKeyPressed(Im::ImGuiKey_LeftArrow));
+                    const float ny = static_cast<float>(Im::IsKeyPressed(Im::ImGuiKey_UpArrow) -
+                                                        Im::IsKeyPressed(Im::ImGuiKey_DownArrow));
+                    if (nx != 0 || ny != 0) {
+                        const auto nudged = Custom::Constrain(
+                            {f.slots[s.selected].lateral + nx * Custom::step,
+                             f.slots[s.selected].longitudinal + ny * Custom::step}, s.snap);
+                        if (!Custom::Crowded(f, nudged, s.selected)) {
+                            f.slots[s.selected] = nudged;
+                        }
+                    }
+                }
+            }
+            // Where companions beyond the drawn places fall in (once there is a formation to follow).
+            for (int role = f.count; f.count > 0 && role < static_cast<int>(party.size()) && role < PARTY_CAPACITY; ++role) {
+                const auto p = toScreen(Custom::RolePosition(f, role));
+                for (int k = 0; k < 12; k += 2) {
+                    const float a0 = k * Wheel::pi / 6, a1 = (k + 1) * Wheel::pi / 6;
+                    Draw::PathArcTo(draw, p, token * .8F, a0, a1, 4);
+                    Draw::PathStroke(draw, IM_COL32(180, 176, 160, 90 * fade), 0, 1.5F);
+                }
+            }
+            // A ghost where a click would put a new place.
+            if (hovered && inside && s.dragging < 0 && under(mouse) < 0 && f.count < PARTY_CAPACITY) {
+                const auto ghost = Custom::Constrain(toWorld(mouse), s.snap);
+                if (!Custom::Crowded(f, ghost)) {
+                    const auto p = toScreen(ghost);
+                    Draw::AddCircle(draw, p, token, IM_COL32(240, 199, 74, 110 * fade), 28, 1.5F);
+                    Draw::AddLine(draw, {p.x - token * .35F, p.y}, {p.x + token * .35F, p.y},
+                                  IM_COL32(240, 199, 74, 150 * fade), 1.5F);
+                    Draw::AddLine(draw, {p.x, p.y - token * .35F}, {p.x, p.y + token * .35F},
+                                  IM_COL32(240, 199, 74, 150 * fade), 1.5F);
+                }
+            }
+            for (int i = 0; i < f.count; ++i) {
+                const auto p = toScreen(f.slots[i]);
+                const bool chosen = i == s.selected;
+                const float q = s.pop[i], grow = 1 + .5F * (1 - q) * std::sin(q * Wheel::pi);
+                const float r = token * (.6F + .4F * q) * grow;
+                if (chosen) {
+                    for (int ring = 3; ring > 0; --ring) {
+                        Draw::AddCircleFilled(draw, p, r + ring * u * .006F, IM_COL32(240, 199, 74, 16 * fade), 32);
+                    }
+                }
+                Draw::AddLine(draw, centre, p, IM_COL32(240, 199, 74, (chosen ? 55 : 18) * fade), 1);
+                Draw::AddCircleFilled(draw, p, r, chosen ? IM_COL32(58, 50, 24, 255 * fade) : IM_COL32(26, 34, 37, 255 * fade),
+                                      32);
+                Draw::AddCircle(draw, p, r,
+                                chosen ? IM_COL32(246, 206, 86, 255 * fade) : IM_COL32(214, 206, 186, 200 * fade), 32,
+                                chosen ? 2.5F : 1.5F);
+                const auto number = std::to_string(i + 1);
+                {
+                    Inscription font;
+                    CenteredText(draw, number.c_str(), {p.x, p.y - r * .62F}, r * 1.2F,
+                                 chosen ? IM_COL32(250, 224, 140, 255 * fade) : IM_COL32(230, 222, 204, 255 * fade), r * 2);
+                }
+                if (!f.names[i].empty()) {
+                    CenteredText(draw, f.names[i].c_str(), {p.x, p.y + r + u * .004F}, u * .017F,
+                                 Faded(chosen ? yellow : IM_COL32(200, 196, 182, 255), fade), u * .16F);
+                }
+            }
+
+            // The panel.
+            const float x0 = mapOrigin.x + mapSize + u * .05F, x1 = end.x - u * .05F, pw = x1 - x0;
+            float y = origin.y + u * .15F;
+            auto line = [&](const char* value, float fontSize, Im::ImU32 color) {
+                Draw::AddText(draw, Im::GetFont(), fontSize, {x0, y}, Faded(color, fade), value);
+                y += fontSize * 1.3F;
+            };
+            {
+                Inscription font;
+                Draw::AddText(draw, Im::GetFont(), u * .034F, {x0, y}, Faded(IM_COL32(235, 225, 203, 255), fade), "Places");
+            }
+            const auto tally = std::to_string(f.count) + " / " + std::to_string(PARTY_CAPACITY);
+            const float tallyWidth = Im::CalcTextSize(tally.c_str()).x * u * .024F / Im::GetFontSize();
+            Draw::AddText(draw, Im::GetFont(), u * .024F, {x1 - tallyWidth, y + u * .008F}, Faded(gold, fade),
+                          tally.c_str());
+            y += u * .05F;
+            line("Click the map to add a place, drag to move it.", u * .019F, muted);
+            line("Right-click or Delete removes; arrow keys nudge.", u * .019F, muted);
+            y += u * .012F;
+            Draw::AddLine(draw, {x0, y}, {x1, y}, IM_COL32(166, 151, 114, 50 * fade), 1);
+            y += u * .025F;
+            if (s.selected >= 0 && s.selected < f.count) {
+                const auto slot = f.slots[s.selected];
+                {
+                    Inscription font;
+                    const auto title = "Place " + std::to_string(s.selected + 1);
+                    Draw::AddText(draw, Im::GetFont(), u * .028F, {x0, y}, Faded(yellow, fade), title.c_str());
+                }
+                y += u * .042F;
+                char where[96];
+                std::snprintf(where, sizeof(where), "%.1f m %s,  %.1f m %s",
+                              std::abs(slot.lateral) / Custom::unitsPerMetre, slot.lateral < 0 ? "left" : "right",
+                              std::abs(slot.longitudinal) / Custom::unitsPerMetre,
+                              slot.longitudinal < 0 ? "behind" : "ahead");
+                line(where, u * .02F, IM_COL32(200, 196, 182, 255));
+                y += u * .01F;
+                line("Who stands here", u * .019F, muted);
+                const auto& reservedName = f.names[s.selected];
+                const std::string preview = reservedName.empty() ? "Anyone" : reservedName;
+                Im::SetCursorScreenPos({x0, y});
+                Im::SetNextItemWidth(pw);
+                if (Im::BeginCombo("##who", preview.c_str())) {
+                    if (Im::Selectable("Anyone", reservedName.empty())) {
+                        Custom::Reserve(f, s.selected, {}, {});
+                    }
+                    for (const auto& companion : party) {
+                        if (Im::Selectable(companion.name.c_str(), f.companions[s.selected] == companion.key)) {
+                            Custom::Reserve(f, s.selected, companion.key, companion.name);
+                        }
+                    }
+                    Im::EndCombo();
+                }
+                y += u * .06F;
+                const float bw = (pw - u * .02F) * .5F, bh = u * .05F;
+                if (EditorButton("mirror", "Mirror", {x0, y}, {bw, bh},
+                                 f.count < PARTY_CAPACITY && std::abs(slot.lateral) >= Custom::spacing * .5F, false, fade)) {
+                    if (Custom::MirrorOne(f, s.selected, s.snap)) {
+                        s.selected = f.count - 1;
+                        s.pop[s.selected] = .35F;
+                    }
+                }
+                if (EditorButton("remove", "Remove", {x0 + bw + u * .02F, y}, {bw, bh}, true, false, fade)) {
+                    Custom::Remove(f, s.selected);
+                    s.selected = std::min(s.selected, f.count - 1);
+                }
+                y += bh + u * .03F;
+            }
+            else {
+                line(f.count ? "Select a place to choose who stands there." : "No places yet.", u * .02F,
+                     IM_COL32(200, 196, 182, 255));
+                line(f.count ? "" : "Click the map, or start from a style below.", u * .019F, muted);
+                y += u * .086F;
+            }
+            Draw::AddLine(draw, {x0, y}, {x1, y}, IM_COL32(166, 151, 114, 50 * fade), 1);
+            y += u * .025F;
+            line("Start from", u * .019F, muted);
+            {
+                constexpr const char* names[]{"Natural", "Lead", "Companion", "Rear"};
+                constexpr FormationMode styles[]{FormationMode::kDynamic, FormationMode::kLead,
+                                                 FormationMode::kCompanion, FormationMode::kRear};
+                const float bw = (pw - u * .03F) / 4, bh = u * .046F;
+                for (int i = 0; i < 4; ++i) {
+                    Im::PushID(i);
+                    if (EditorButton("style", names[i], {x0 + i * (bw + u * .01F), y}, {bw, bh}, true, false, fade)) {
+                        Custom::Formation fresh;
+                        const int places = std::clamp(std::max(static_cast<int>(party.size()), 3), 1, PARTY_CAPACITY);
+                        for (int k = 0; k < places; ++k) {
+                            Custom::Add(fresh, FormationPosition(styles[i], k), false);
+                        }
+                        f = fresh;
+                        s.selected = f.count ? 0 : -1;
+                        for (int k = 0; k < f.count; ++k) {
+                            s.pop[k] = .2F + .05F * k;
+                        }
+                    }
+                    Im::PopID();
+                }
+                y += bh + u * .016F;
+                const float half = (pw - u * .02F) * .5F;
+                if (EditorButton("flip", "Flip left and right", {x0, y}, {half, bh}, f.count > 0, false, fade)) {
+                    Custom::Flip(f);
+                }
+                if (EditorButton("clear", "Clear", {x0 + half + u * .02F, y}, {half, bh}, f.count > 0, false, fade)) {
+                    f = {};
+                    s.selected = -1;
+                }
+                y += bh + u * .02F;
+            }
+            Im::SetCursorScreenPos({x0, y});
+            Im::Checkbox("Snap to a 35 cm grid", &s.snap);
+            y += u * .06F;
+            const int partySize = static_cast<int>(party.size());
+            std::string summary = f.count == 0     ? "Draw at least one place to use this formation."
+                                  : partySize == 0 ? "Your companions will take these places in order."
+                                  : partySize > f.count
+                                      ? std::to_string(partySize - f.count) + (partySize - f.count == 1 ? " companion falls" : " companions fall") +
+                                            " in behind (dotted)."
+                                      : "Everyone in your party has a place.";
+            line(summary.c_str(), u * .019F, IM_COL32(200, 196, 182, 255));
+
+            // Footer.
+            const bool changed = !(f == s.saved);
+            const float bh = u * .058F, by = end.y - u * .045F - bh;
+            if (changed) {
+                Draw::AddText(draw, Im::GetFont(), u * .019F, {x0, by - u * .04F}, Faded(yellow, fade * .9F),
+                              "Unsaved changes");
+            }
+            const float bw = (pw - u * .04F) / 3;
+            if (EditorButton("close", "Close", {x0, by}, {bw, bh}, true, false, fade)) {
+                action = 3;
+            }
+            if (EditorButton("save", "Save", {x0 + bw + u * .02F, by}, {bw, bh}, changed, false, fade)) {
+                action = 1;
+            }
+            if (EditorButton("use", "Save and use", {x0 + 2 * (bw + u * .02F), by}, {bw, bh}, f.count > 0, true, fade)) {
+                action = 2;
+            }
+            return action;
+        }
+        // FORMATION_EDITOR_END
+        FormationEditorState formationEditor;
+        MF::Model::WindowInterface* formationWindow{};
+        void OpenFormationEditor(const PartyView& view)
+        {
+            if (!formationWindow) {
+                return;
+            }
+            formationEditor.Open(view.settings.customFormation);
+            formationWindow->IsOpen = true;
+        }
+        void __stdcall RenderFormationEditor()
+        {
+            if (!formationWindow || !formationWindow->IsOpen) {
+                return;
+            }
+            const auto view = Read();
+            Theme theme;
+            const auto display = Im::GetIO()->DisplaySize;
+            const float height = std::min(display.y * .86F, display.x * .92F / 1.52F), width = height * 1.52F;
+            Im::SetNextWindowPos({display.x * .5F, display.y * .5F}, Im::ImGuiCond_Always, {.5F, .5F});
+            Im::SetNextWindowSize({width, height}, Im::ImGuiCond_Always);
+            Im::PushStyleVar(Im::ImGuiStyleVar_WindowBorderSize, 0.0F);
+            Im::PushStyleColor(Im::ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
+            if (Im::Begin("WalkWithMeFormationEditor", nullptr,
+                          Im::ImGuiWindowFlags_NoTitleBar | Im::ImGuiWindowFlags_NoResize | Im::ImGuiWindowFlags_NoMove |
+                              Im::ImGuiWindowFlags_NoScrollbar | Im::ImGuiWindowFlags_NoScrollWithMouse |
+                              Im::ImGuiWindowFlags_NoSavedSettings | Im::ImGuiWindowFlags_NoNav)) {
+                auto& s = formationEditor;
+                s.appear = std::min(1.0F, s.appear + std::min(Im::GetIO()->DeltaTime, .05F) / .25F);
+                const float fade = Wheel::EaseOut(s.appear);
+                Draw::AddRectFilled(Im::GetBackgroundDrawList(), {0, 0}, display, IM_COL32(7, 12, 16, 150 * fade), 0, 0);
+                std::vector<EditorCompanion> party;
+                for (const auto& row : view.party) {
+                    if (!row.handHoldKey.empty() && (row.managed || row.manuallyAdded || row.packageControlled ||
+                                                     row.apiRegistered || row.eligible || row.teammate)) {
+                        party.push_back({row.handHoldKey, row.name});
+                    }
+                }
+                const auto origin = Im::GetWindowPos();
+                const int action = FormationEditor({origin.x, origin.y + height * .02F * (1 - fade)}, {width, height},
+                                                   s, party, fade);
+                if (action == 1 || action == 2) {
+                    const auto formation = Custom::Sanitize(s.draft);
+                    const bool use = action == 2;
+                    s.saved = s.draft = formation;
+                    Queue([formation, use](auto& c) {
+                        auto value = c.Snapshot().settings;
+                        value.customFormation = Custom::WithPlaces(value.customFormation, formation);
+                        if (!c.ApplyPreferences(value)) {
+                            Engine::Notify("Walk With Me could not save the custom formation");
+                            return;
+                        }
+                        if (use && formation.Defined()) {
+                            c.SetMode(FormationMode::kCustom);
+                            ++orderNotice;
+                            Engine::Notify(fmt::format("Travelling in {}", value.customFormation.title).c_str());
+                        }
+                        else {
+                            Engine::Notify(formation.Defined() ? "Custom formation saved" : "Custom formation cleared");
+                        }
+                    });
+                }
+                if (action == 2 || action == 3 || Im::IsKeyPressed(Im::ImGuiKey_Escape, false)) {
+                    formationWindow->IsOpen = false;
+                }
+            }
+            Im::End();
+            Im::PopStyleColor();
+            Im::PopStyleVar();
         }
         void __stdcall RenderHUD()
         {
             const auto view = Read();
-            static Overhead::Animation chatMotion, lootMotion;
+            static Overhead::Animation chatMotion, lootMotion, pathMotion;
             static std::uint64_t markerGeneration{};
             if (markerGeneration != view.generation) {
                 chatMotion.Clear();
                 lootMotion.Clear();
+                pathMotion.Clear();
                 markerGeneration = view.generation;
             }
             chatMotion.BeginFrame(Im::GetIO()->DeltaTime);
             lootMotion.BeginFrame(Im::GetIO()->DeltaTime);
+            pathMotion.BeginFrame(Im::GetIO()->DeltaTime);
             // Publish only game-thread projections; never retain a hidden or missing marker.
             if (view.inGame && view.enabled && !MF::IsAnyBlockingWindowOpened()) {
                 const auto display = Im::GetIO()->DisplaySize;
@@ -1857,18 +2942,29 @@ namespace Wayfarer::Menu
                         OrderVisuals::Chat(draw, p, size * pose.scale, pose.alpha);
                     }
                 }
-                if (view.settings.loot.enabled && view.settings.loot.icons) {
+                const bool lootIcons = view.settings.loot.enabled && view.settings.loot.icons;
+                const bool pathIcons = view.settings.pathfinder.enabled && view.settings.pathfinder.icon;
+                if (lootIcons || pathIcons) {
                     for (const auto& marker : Loot::ReadMarkers()) {
-                        const auto pose = lootMotion.Show(marker.actor);
+                        if (marker.pathfinder ? !pathIcons : !lootIcons) {
+                            continue;
+                        }
+                        const auto pose = (marker.pathfinder ? pathMotion : lootMotion).Show(marker.actor);
                         const float size = 34 * scale;
                         const V p{marker.x * display.x, marker.y * display.y + pose.rise * size};
-                        OrderVisuals::Loot(draw, p, size * pose.scale, marker.valuable,
-                                           pose.alpha * marker.alpha);
+                        if (marker.pathfinder) {
+                            OrderVisuals::PathfinderEmblem(draw, p, size * pose.scale, pose.alpha * marker.alpha);
+                        }
+                        else {
+                            OrderVisuals::Loot(draw, p, size * pose.scale, marker.valuable,
+                                               pose.alpha * marker.alpha);
+                        }
                     }
                 }
             }
             chatMotion.EndFrame();
             lootMotion.EndFrame();
+            pathMotion.EndFrame();
             if (capturing.load() >= 0 && GetTickCount64() - captureStarted.load() > 15000) {
                 CancelCapture();
             }
@@ -1925,9 +3021,10 @@ namespace Wayfarer::Menu
             }
             OrderVisuals::Icon(draw, {right - 42 * scale, y}, 56 * scale, mode,
                                preview ? 5.0F : notice.elapsed, alpha);
-            constexpr const char* titles[]{"Natural", "Lead", "Companion", "Rear", "At Ease", "Vanilla"};
+            constexpr const char* titles[]{"Natural", "Lead", "Companion", "Rear", "At Ease", "Vanilla", "Custom"};
             constexpr const char* details[]{"Travelling together", "Taking the lead", "By your side",
-                                            "Watching your back",  "Resting here",    "Follower AI restored"};
+                                            "Watching your back",  "Resting here",    "Follower AI restored",
+                                            "In your formation"};
             auto text = [&](const char* value, float yy, float size, Im::ImU32 color) {
                 auto bounds = Im::CalcTextSize(value);
                 float x = right - 86 * scale - bounds.x * size / Im::GetFontSize();
@@ -1937,7 +3034,8 @@ namespace Wayfarer::Menu
             };
             {
                 Inscription font;
-                text(titles[mode], y - 18 * scale, 20 * scale, IM_COL32(226, 218, 201, 255 * alpha));
+                text(mode == 6 ? view.settings.customFormation.title.c_str() : titles[mode], y - 18 * scale, 20 * scale,
+                     IM_COL32(226, 218, 201, 255 * alpha));
             }
             text(details[mode], y + 9 * scale, 12 * scale, IM_COL32(166, 172, 169, 255 * alpha));
         }
@@ -2015,11 +3113,11 @@ namespace Wayfarer::Menu
                     else if (key == 0x4000) {
                         packageShortcut = true;
                     }
-                    else if (key == 1) {
-                        --padStep;
+                    else if (key == 1 || key == 2) {
+                        padDy += key == 2 ? 1 : -1;
                     }
-                    else if (key == 2) {
-                        ++padStep;
+                    else if (key == 4 || key == 8) {
+                        padDx += key == 8 ? 1 : -1;
                     }
                 }
                 return true;
@@ -2034,7 +3132,8 @@ namespace Wayfarer::Menu
                 !MF::IsAnyBlockingWindowOpened()) {
                 padConfirm = false;
                 padCancel = false;
-                padStep = 0;
+                padDx = 0;
+                padDy = 0;
                 padX = 0;
                 padY = 0;
                 padStickAt = 0;
@@ -2078,6 +3177,10 @@ namespace Wayfarer::Menu
             return false; // Enter and Escape are handled by the focused popup.
         }
         if (commandWindow && commandWindow->IsOpen) {
+            if (key == 1 && gridBackEnabled.load()) {
+                gridBack = true; // Esc on the grid steps back to the wheel.
+                return true;
+            }
             if (key == 1 || hotkeyBindings[0].Get(Read().settings).Matches(key, modifiers)) {
                 SetWheelOpen(false);
                 return true;
@@ -2122,7 +3225,7 @@ namespace Wayfarer::Menu
                 Engine::Notify("Walk With Me party menu requires SKSE Menu Framework 3");
             }
         }
-        else if (action == 7) {
+        else if (action == static_cast<int>(companionHotkeyRow)) {
             if (packageWindow) {
                 OpenPackageControl(FormationController::GetSingleton().Snapshot());
             }
@@ -2133,17 +3236,9 @@ namespace Wayfarer::Menu
         else {
             Queue([action](auto& c) {
                 switch (action) {
-                case 1: {
-                    auto value = c.Snapshot().settings;
-                    value.enabled = !c.IsEnabled();
-                    if (c.ApplyPreferences(value)) {
-                        Engine::Notify(value.enabled ? "Walk With Me enabled" : "Walk With Me disabled");
-                    }
-                    else {
-                        Engine::Notify("Walk With Me could not save the enable setting");
-                    }
+                case 1:
+                    ToggleGuidance(c);
                     break;
-                }
                 case 2:
                     c.CycleMode();
                     break;
@@ -2158,6 +3253,9 @@ namespace Wayfarer::Menu
                     break;
                 case 6:
                     c.ReloadSettings();
+                    break;
+                case static_cast<int>(handHoldHotkeyRow):
+                    ToggleHandHolding(c);
                     break;
                 }
                 if (action >= 2 && action <= 5) {
@@ -2194,7 +3292,10 @@ namespace Wayfarer::Menu
         padStickAt = 0;
         padConfirm = false;
         padCancel = false;
-        padStep = 0;
+        padDx = 0;
+        padDy = 0;
+        gridBack = false;
+        gridBackEnabled = false;
         if (commandWindow) {
             commandWindow->IsOpen = false;
         }
@@ -2236,11 +3337,12 @@ namespace Wayfarer::Menu
         MF::AddSectionItem("Party", RenderParty);
         MF::AddSectionItem("Travel", RenderTravel);
         MF::AddSectionItem("Rest", RenderRest);
-        MF::AddSectionItem("Loot", RenderLoot);
+        MF::AddSectionItem("Roles", RenderRoles);
         MF::AddSectionItem("Interface", RenderInterface);
         MF::AddSectionItem("Controls", RenderControls);
         commandWindow = MF::AddWindow(RenderCommands, true);
         packageWindow = MF::AddWindow(RenderPackageControl, true);
+        formationWindow = MF::AddWindow(RenderFormationEditor, true);
         if (auto* ui = RE::UI::GetSingleton()) {
             ui->Register(companionPauseName, CompanionPauseMenu::Create);
         }

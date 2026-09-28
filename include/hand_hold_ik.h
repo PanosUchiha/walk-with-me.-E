@@ -75,20 +75,24 @@ namespace Wayfarer::HandHolding::IK
         float m[3][3]{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
     };
 
-    inline std::optional<Matrix> WristAlignment(Point along, Point across, bool left, Point desiredPalm)
+    // Rotation taking the hand's current finger direction and palm normal to the desired
+    // ones. The desired finger direction defaults to straight down.
+    inline std::optional<Matrix> WristAlignment(Point along, Point across, bool left, Point desiredPalm,
+                                                Point desiredAlong = {0, 0, -1})
     {
-        if (!Finite(along) || !Finite(across) || !Finite(desiredPalm) || Length(along) < 1e-5F) {
+        if (!Finite(along) || !Finite(across) || !Finite(desiredPalm) || !Finite(desiredAlong) ||
+            Length(along) < 1e-5F || Length(desiredAlong) < 1e-5F) {
             return {};
         }
         along = Unit(along);
         auto palm = Cross(across, along) * (left ? -1.0F : 1.0F);
-        desiredPalm.z = 0;
+        const Point down = Unit(desiredAlong);
+        desiredPalm = desiredPalm - down * Dot(desiredPalm, down);
         if (Length(palm) < 1e-5F || Length(desiredPalm) < 1e-5F) {
             return {};
         }
         palm = Unit(palm);
         desiredPalm = Unit(desiredPalm);
-        const Point down{0, 0, -1};
         const Point source[3]{along, palm, Cross(along, palm)};
         const Point target[3]{down, desiredPalm, Cross(down, desiredPalm)};
         Matrix result;
@@ -108,6 +112,43 @@ namespace Wayfarer::HandHolding::IK
         }
         return result;
     }
+    inline Point Transform(const Matrix& r, Point p)
+    {
+        return {r.m[0][0] * p.x + r.m[0][1] * p.y + r.m[0][2] * p.z,
+                r.m[1][0] * p.x + r.m[1][1] * p.y + r.m[1][2] * p.z,
+                r.m[2][0] * p.x + r.m[2][1] * p.y + r.m[2][2] * p.z};
+    }
+    // Signed angle about `axis` from `from` to `to`, ignoring their components along it.
+    inline float TwistAbout(Point axis, Point from, Point to)
+    {
+        axis = Unit(axis);
+        from = from - axis * Dot(from, axis);
+        to = to - axis * Dot(to, axis);
+        if (!Finite(axis) || Length(from) < 1e-5F || Length(to) < 1e-5F) {
+            return 0;
+        }
+        return std::atan2(Dot(axis, Cross(from, to)), Dot(from, to));
+    }
+
+    // One hand of an interlocked clasp. The player's palm faces back and the companion's
+    // faces forward, so the palms press front to back instead of side to side. Each
+    // hand's fingers point down and across the centre line, past the other hand, where
+    // they curl around its far edge. `grip` is where the two palm centres meet.
+    struct ClaspHand
+    {
+        Point along, palm, wrist;
+    };
+    inline constexpr float claspTilt = .61F;   // fingers 35 degrees across the centre line
+    inline constexpr float claspPalm = 5.0F;   // wrist to palm centre along the fingers
+    inline constexpr float claspDepth = 2.35F; // hand axis to palm surface
+    inline ClaspHand InterlockedHand(Point grip, Point forward, Point right, int side, bool player)
+    {
+        const float toward = static_cast<float>(side) * (player ? 1.0F : -1.0F);
+        const auto along = Unit(Point{0, 0, -std::cos(claspTilt)} + right * (toward * std::sin(claspTilt)));
+        const auto palm = forward * (player ? -1.0F : 1.0F);
+        return {along, palm, grip - along * claspPalm + forward * (player ? claspDepth : -claspDepth)};
+    }
+
     inline Matrix Rotation(float angle, Point axis)
     {
         axis = Unit(axis);

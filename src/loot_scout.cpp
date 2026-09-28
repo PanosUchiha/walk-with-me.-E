@@ -183,22 +183,14 @@ namespace Wayfarer::Loot
             return std::isfinite(radius) && radius > 0 ? std::min(radius, 200.0F) : 40.0F;
         }
 
-        // One ray on the line-of-sight layer. People never block it. Only the find itself, or a surface
-        // within a hand's width of the aim point, may stop it short; any other hit means something is
-        // in the way, however close to the find it is.
-        bool Clear(RE::TESObjectCELL* cell, RE::NiPoint3 from, RE::NiPoint3 to, RE::FormID target)
+        // One ray on the line-of-sight layer; false if the physics world could not be asked.
+        bool Pick(RE::TESObjectCELL* cell, RE::NiPoint3 from, RE::NiPoint3 to, SightCollector& collector)
         {
-            constexpr float handWidth = 12;
             auto* world = cell ? cell->GetbhkWorld() : nullptr;
             const float scale = RE::bhkWorld::GetWorldScale();
-            const float length = from.GetDistance(to);
-            if (!world || !std::isfinite(scale) || scale <= 0 || !std::isfinite(length)) {
+            if (!world || !std::isfinite(scale) || scale <= 0) {
                 return false;
             }
-            if (length < 1) {
-                return true;
-            }
-            SightCollector collector;
             collector.Reset();
             RE::bhkPickData pick{};
             const auto a = from * scale, b = to * scale;
@@ -216,14 +208,29 @@ namespace Wayfarer::Loot
                 world->PickObject(pick);
             }
 #ifdef WAYFARER_MODERN_COMMONLIB
-            if (pick.pickFailed) {
-                return false;
-            }
+            return !pick.pickFailed;
 #else
-            if (pick.unkC0) {
+            return !pick.unkC0;
+#endif
+        }
+
+        // People never block the ray. Only the find itself, or a surface within a hand's width of
+        // the aim point, may stop it short; any other hit means something is in the way, however
+        // close to the find it is.
+        bool Clear(RE::TESObjectCELL* cell, RE::NiPoint3 from, RE::NiPoint3 to, RE::FormID target)
+        {
+            constexpr float handWidth = 12;
+            const float length = from.GetDistance(to);
+            if (!std::isfinite(length)) {
                 return false;
             }
-#endif
+            if (length < 1) {
+                return true;
+            }
+            SightCollector collector;
+            if (!Pick(cell, from, to, collector)) {
+                return false;
+            }
             if (!collector.HasHit() || collector.closestReference == target) {
                 return true;
             }
@@ -356,6 +363,22 @@ namespace Wayfarer::Loot
         const RE::NiPoint3 top{center.x, center.y, center.z + std::min(Radius(ref) * .5F, 40.0F)};
         return Clear(actor.GetParentCell(), eye, center, ref.GetFormID()) ||
                Clear(actor.GetParentCell(), eye, top, ref.GetFormID());
+    }
+
+    float SightFraction(RE::TESObjectCELL* cell, RE::NiPoint3 from, RE::NiPoint3 to)
+    {
+        SightCollector collector;
+        if (!Pick(cell, from, to, collector)) {
+            return 0;
+        }
+        return collector.HasHit() && std::isfinite(collector.rayHit.hitFraction)
+                   ? std::clamp(collector.rayHit.hitFraction, 0.0F, 1.0F)
+                   : 1.0F;
+    }
+
+    bool PlayGesture(RE::Actor& actor, RE::FormID idle)
+    {
+        return PlayIdle(actor, RE::TESForm::LookupByID<RE::TESIdleForm>(idle));
     }
 
     bool Reaches(RE::Actor& actor, RE::TESObjectREFR& ref, RE::NiPoint3 center)
@@ -535,13 +558,26 @@ namespace Wayfarer::Loot
         });
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* ui = RE::UI::GetSingleton();
-        const auto& tuning = Settings::GetSingleton().Get().loot;
-        if (!Menu::IsInstalled() || !tuning.enabled || !tuning.icons || !player || !ui || !VisibleUI(*ui) ||
+        const auto& settings = Settings::GetSingleton().Get();
+        const bool lootIcons = settings.loot.enabled && settings.loot.icons;
+        const bool pathIcons = settings.pathfinder.enabled && settings.pathfinder.icon;
+        if (!Menu::IsInstalled() || (!lootIcons && !pathIcons) || !player || !ui || !VisibleUI(*ui) ||
             player->IsDead() || !player->Is3DLoaded()) {
             Reset();
             return;
         }
-        const auto scouts = FormationController::GetSingleton().LootScouts();
+        // The pathfinder's emblem rides the same projection as the loot chest; the two roles never
+        // fall to the same companion at once.
+        auto& controller = FormationController::GetSingleton();
+        std::vector<FormationController::LootScoutView> scouts;
+        if (lootIcons) {
+            scouts = controller.LootScouts();
+        }
+        const auto lootCount = scouts.size();
+        if (pathIcons) {
+            const auto guides = controller.Pathfinders();
+            scouts.insert(scouts.end(), guides.begin(), guides.end());
+        }
         if (scouts.empty()) {
             Reset();
             return;
@@ -555,7 +591,8 @@ namespace Wayfarer::Loot
         auto* cameraOwner = RE::PlayerCamera::GetSingleton();
         auto* camera = Camera(cameraOwner ? cameraOwner->cameraRoot.get() : nullptr);
         std::vector<Marker> frame;
-        for (const auto& scout : scouts) {
+        for (std::size_t index = 0; index < scouts.size(); ++index) {
+            const auto& scout = scouts[index];
             auto actor = scout.actor.get();
             if (!camera || !actor || actor->IsDead() || actor->IsDisabled() || !actor->Is3DLoaded() ||
                 !InSameTravelSpace(*actor, *player)) {
@@ -583,7 +620,8 @@ namespace Wayfarer::Loot
                                                  camera->GetRuntimeData2().port, point, x, y, z, 1e-5F) &&
                 std::isfinite(x) && std::isfinite(y) && std::isfinite(z) && z > 0 && x > .02F && x < .98F &&
                 y > .03F && y < .97F) {
-                frame.push_back({x, 1.0F - y, scout.valuable, IconAlpha(scout.elapsed), actor->GetFormID()});
+                frame.push_back({x, 1.0F - y, scout.valuable, IconAlpha(scout.elapsed), actor->GetFormID(),
+                                 index >= lootCount});
             }
         }
         Publish(std::move(frame));

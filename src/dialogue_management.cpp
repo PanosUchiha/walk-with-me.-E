@@ -35,7 +35,7 @@ namespace Wayfarer
         }
         if (const auto entry = packageRegistrations.find(id); entry != packageRegistrations.end()) {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
-            return actor && !PackageControlLoss(*actor, entry->second);
+            return actor && !actor->IsDead() && !PackageControlSuspended(id);
         }
         if (!dialogueRegistrations.contains(id)) {
             return false;
@@ -57,8 +57,7 @@ namespace Wayfarer
         const auto rank =
             FollowerDialogueRank(dialogueRegistrations.contains(id), managed.contains(id),
                                  manualRegistrations.contains(id) || packageRegistrations.contains(id),
-                                 explicitExclusions.contains(id), IsDialogueFollower(actor),
-                                 enabled && mode != FormationMode::kVanilla);
+                                 explicitExclusions.contains(id), IsDialogueFollower(actor), true);
         if (Engine::FactionRank(actor, faction) == rank) {
             return;
         }
@@ -95,6 +94,7 @@ namespace Wayfarer
             return;
         }
         const auto id = actor->GetFormID();
+        const bool directing = enabled && mode != FormationMode::kVanilla;
         if (add) {
             if (dialogueRegistrations.contains(id) || manualRegistrations.contains(id) ||
                 packageRegistrations.contains(id) ||
@@ -102,11 +102,20 @@ namespace Wayfarer
                 return;
             }
             if (!IsDialogueFollower(*actor)) {
-                Notify("This companion is no longer following you.");
-                return;
-            }
-            if (!enabled || mode == FormationMode::kVanilla) {
-                Notify("Enable Walk With Me before adding a companion.");
+                // Recruited through something that keeps no roster Walk With Me can read (a custom
+                // follower's own framework): take them anyway, following their teammate flag.
+                if (actor->IsPlayerTeammate() || IsNFFFollower(*actor)) {
+                    if (const auto* reason = ImportCompanion(*actor)) {
+                        Notify(reason);
+                    }
+                    else {
+                        Notify(directing ? "Companion added to Walk With Me."
+                                         : "Companion added. They join you once a travel style is chosen.");
+                    }
+                    scanTimer = Settings::GetSingleton().Get().scanInterval;
+                    return;
+                }
+                Notify("This companion is not following you.");
                 return;
             }
             if (!managed.contains(id) &&
@@ -116,7 +125,8 @@ namespace Wayfarer
             }
             dialogueRegistrations.insert(id);
             explicitExclusions.erase(id);
-            Notify("Companion added to Walk With Me.");
+            Notify(directing ? "Companion added to Walk With Me."
+                             : "Companion added. They join you once a travel style is chosen.");
         }
         else {
             if (!dialogueRegistrations.erase(id)) {
@@ -145,34 +155,30 @@ namespace Wayfarer
             actor.AsActorValueOwner()->GetActorValue(RE::ActorValue::kWaitingForPlayer));
     }
 
+    // Taking control records a choice; whether the NPC can move right now (combat, a scene, a
+    // wait order, Vanilla mode) is left to the ordinary movement guards, which pause and resume
+    // them. So a recruited follower is accepted from anywhere and in any state.
     const char* FormationController::PackageControlStartRejection(RE::Actor& actor) const
     {
         auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player || actor.IsPlayerRef() || actor.IsDead() || actor.IsDisabled() || !actor.Is3DLoaded()) {
-            return "Select a nearby living NPC";
+        if (!player || actor.IsPlayerRef() || actor.IsDead() || actor.IsDisabled()) {
+            return "Select a living NPC";
         }
-        if (!InSameTravelSpace(actor, *player)) {
-            return "Move into the same area as this NPC";
-        }
-        if (actor.GetPosition().GetDistance(player->GetPosition()) > 800.0F) {
+        const bool recruited = actor.IsPlayerTeammate() || IsNFFFollower(actor);
+        if (!recruited && (!actor.Is3DLoaded() || !InSameTravelSpace(actor, *player) ||
+                           actor.GetPosition().GetDistance(player->GetPosition()) > 800.0F)) {
             return "Move closer to this NPC";
         }
         if (manualRegistrations.contains(actor.GetFormID())) {
             return "Controlled by an API integration";
         }
-        if (actor.IsHostileToActor(player) || actor.IsInCombat()) {
-            return "Wait until this NPC is out of combat and friendly";
-        }
-        if (!actor.IsAIEnabled() || actor.GetCurrentScene()) {
-            return "Wait until this NPC's current scene finishes";
+        if (actor.IsHostileToActor(player)) {
+            return "This NPC is hostile";
         }
         if (const auto* reason = PackageControlRejection(
                 1, false, false,
                 actor.AsActorValueOwner()->GetActorValue(RE::ActorValue::kWaitingForPlayer))) {
             return reason;
-        }
-        if (!enabled || mode == FormationMode::kVanilla) {
-            return "Enable Walk With Me and choose a travel style first";
         }
         auto reserved = managed.size();
         for (const auto& [id, flags] : packageRegistrations) {
@@ -198,6 +204,8 @@ namespace Wayfarer
             if (!packageRegistrations.erase(id)) {
                 return;
             }
+            packageLossSince.erase(id);
+            packageSeenFollowing.erase(id);
             explicitExclusions.insert(id);
             RemoveManaged(id);
             logger::info("[PackageControl] Player released {:08X}", id);
@@ -211,34 +219,73 @@ namespace Wayfarer
             if (!actor) {
                 return;
             }
-            if (const auto* reason = PackageControlStartRejection(*actor)) {
+            if (const auto* reason = ImportCompanion(*actor)) {
                 Notify(reason);
                 return;
             }
-            const auto flags = PackageControlFlags(IsNFFFollower(*actor), actor->IsPlayerTeammate());
-            packageRegistrations[id] = flags;
-            dialogueRegistrations.erase(id);
-            explicitExclusions.erase(id);
-            logger::info("[PackageControl] Player imported {} ({:08X}), recruitment tracking={}",
-                         actor->GetName(), id, flags);
-            Notify("Walk With Me will direct this NPC's travel and rest.");
+            Notify(enabled && mode != FormationMode::kVanilla
+                       ? "Walk With Me will direct this NPC's travel and rest."
+                       : "Walk With Me will direct this NPC's travel and rest once a travel style is chosen.");
         }
         scanTimer = Settings::GetSingleton().Get().scanInterval;
     }
 
+    const char* FormationController::ImportCompanion(RE::Actor& actor)
+    {
+        if (const auto* reason = PackageControlStartRejection(actor)) {
+            return reason;
+        }
+        const auto id = actor.GetFormID();
+        const auto flags = PackageControlFlags(IsNFFFollower(actor), actor.IsPlayerTeammate());
+        packageRegistrations[id] = flags;
+        packageLossSince.erase(id);
+        packageSeenFollowing.insert(id);
+        dialogueRegistrations.erase(id);
+        explicitExclusions.erase(id);
+        logger::info("[PackageControl] Player imported {} ({:08X}), recruitment tracking={}", actor.GetName(), id,
+                     flags);
+        return nullptr;
+    }
+
+    bool FormationController::PackageControlSuspended(RE::FormID id) const
+    {
+        const auto lost = packageLossSince.find(id);
+        return lost != packageLossSince.end() && PackageControlPaused(lost->second, GetTickCount64());
+    }
+
+    // A dismissal, a framework re-slotting its roster or a quest scene that clears the teammate
+    // flag pauses an import; it resumes by itself when the NPC follows again. Only the player's
+    // Release (or death) ends it, so a companion once taken stays taken.
     void FormationController::UpdatePackageControl()
     {
+        const auto now = GetTickCount64();
         std::vector<RE::FormID> released;
         for (auto& [id, flags] : packageRegistrations) {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
             if (!actor) {
                 continue;
             }
-            if (const auto* reason = PackageControlLoss(*actor, flags)) {
-                logger::info("[PackageControl] Releasing {} ({:08X}): {}", actor->GetName(), id, reason);
+            if (actor->IsDead()) {
+                logger::info("[PackageControl] Ending control of {} ({:08X}): dead", actor->GetName(), id);
                 released.push_back(id);
+                continue;
             }
-            else if (IsNFFFollower(*actor)) {
+            if (const auto* reason = PackageControlLoss(*actor, flags)) {
+                auto [lost, first] =
+                    packageLossSince.try_emplace(id, PackageControlLossStart(now, packageSeenFollowing.contains(id)));
+                const bool paused = PackageControlPaused(lost->second, now);
+                if (paused && packageSeenFollowing.erase(id) + (first ? 1 : 0) > 0) {
+                    logger::info("[PackageControl] Pausing {} ({:08X}): {}; resumes when they follow again",
+                                 actor->GetName(), id, reason);
+                    RemoveManaged(id);
+                }
+                continue;
+            }
+            if (packageLossSince.erase(id) && !packageSeenFollowing.contains(id)) {
+                logger::info("[PackageControl] Resuming {} ({:08X})", actor->GetName(), id);
+            }
+            packageSeenFollowing.insert(id);
+            if (IsNFFFollower(*actor)) {
                 flags = PackageControlFlags(true, true);
             }
             else if (flags == 1 && actor->IsPlayerTeammate()) {
@@ -247,7 +294,8 @@ namespace Wayfarer
         }
         for (const auto id : released) {
             packageRegistrations.erase(id);
-            explicitExclusions.insert(id);
+            packageLossSince.erase(id);
+            packageSeenFollowing.erase(id);
             RemoveManaged(id);
         }
     }

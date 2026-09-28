@@ -17,13 +17,13 @@ int main()
         }
         check(!Supports({1, 4, 15, 0}, modern));
         check(!Supports({1, 6, 678, 0}, modern));
-        check(!Supports({1, 6, 1170, 1}, modern));
         check(!Supports({1, 7, 200, 0}, modern));
         check(!Supports({2, 0, 0, 0}, modern));
+        // SKSE reports GOG as 1.6.1179.1. GOG 1.6.1170 would load Steam's Address Library.
+        check(Supports({1, 6, 1179, 1}, modern) && Supports({1, 6, 659, 1}, modern));
+        check(!Supports({1, 6, 1170, 1}, modern));
+        check(!Supports({1, 6, 678, 2}, modern));
     }
-    // GOG ships 1.6.1179, which is an ordinary post-629 AE runtime as far as both
-    // libraries are concerned; nothing about it needs the NG build specifically.
-    check(Supports({1, 6, 1179, 0}, false) && Supports({1, 6, 1179, 0}, true));
     for (auto patch : {99, 104}) {
         check(!Supports({1, 7, static_cast<std::uint16_t>(patch), 0}, false));
         check(Supports({1, 7, static_cast<std::uint16_t>(patch), 0}, true));

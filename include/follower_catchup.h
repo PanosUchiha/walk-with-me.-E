@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <vector>
 
 namespace Wayfarer
@@ -36,6 +37,57 @@ namespace Wayfarer
             cooldown = moved ? recallCooldown : retryCooldown;
         }
     };
+
+    // Nether's Follower Framework teleports its roster on a timer of its own: every nwsWarpStart
+    // seconds it moves anyone beyond range, or unloaded, 512 units behind the player with no ground
+    // check. While Walk With Me does the teleporting, that interval is parked out of reach, so the
+    // two never race and NFF never pulls a companion out of a Relax camp. NFF's own switch
+    // (nwsAllowWarp) is left alone: turning it off also stops NFF's update loop from re-arming.
+    struct FrameworkWarpPark
+    {
+        static constexpr float parked = 1.0e9F;
+        static constexpr float fallback = 8.0F; // NFF's default interval.
+        float saved{fallback};
+        bool active{};
+
+        // The value to write to the interval now; NaN leaves it alone.
+        float Update(bool want, float current)
+        {
+            if (!std::isfinite(current)) {
+                return std::numeric_limits<float>::quiet_NaN();
+            }
+            if (want) {
+                active = true;
+                if (current == parked) {
+                    return std::numeric_limits<float>::quiet_NaN();
+                }
+                saved = current; // The first park, or the player changed it while it was released.
+                return parked;
+            }
+            active = false;
+            // Never leave a park behind, even one an earlier session made.
+            return current == parked ? saved : std::numeric_limits<float>::quiet_NaN();
+        }
+
+        // Before a save, and while the journal (where NFF's menu lives) is open: the player's own
+        // value. The next update parks it again if Walk With Me still wants it. Whoever writes a
+        // restored value back also restarts NFF's countdown (warpCDTime), which kept counting
+        // while parked and would otherwise fire a warp on NFF's very next tick.
+        float Release(float current)
+        {
+            active = false;
+            return current == parked ? saved : std::numeric_limits<float>::quiet_NaN();
+        }
+    };
+
+    // Walk With Me does NFF's teleporting as well as its own only when NFF's catch-up is on, the
+    // player allows the takeover, Walk With Me is directing the party, and it is either teleporting
+    // itself or keeping a Relax camp that NFF would otherwise empty.
+    inline bool OwnsFrameworkCatchup(bool nffInstalled, bool nffCatchupOn, bool takeoverAllowed,
+                                     bool directing, bool teleporting, bool holdingCamp)
+    {
+        return nffInstalled && nffCatchupOn && takeoverAllowed && directing && (teleporting || holdingCamp);
+    }
 
     // A drop into a ravine or a stranding on a ledge far above counts as distance
     // even when the companion is close on the map.

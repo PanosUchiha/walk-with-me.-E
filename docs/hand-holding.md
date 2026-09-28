@@ -8,11 +8,11 @@ to let them approach and connect. Walking, jogging and running are supported.
 
 In Travel settings, choose **Hand-holding method**:
 
-- **Classic** restores the earlier procedural arm pose and sticky
-  walking attachment. It needs no generated clasp clips and does not use TETHER
-  physics. This uses the retained classic implementation with its later
-  direction and controller-velocity fixes, rather than reverting the whole mod.
-- **TETHER** keeps the physics grip and generated OAR clasp poses.
+- **Classic** poses the arms procedurally in an interlocked clasp. It does not
+  use the clasp clips or TETHER physics. After the hands connect,
+  the engine walks the companion beside you with the same offset movement TETHER
+  uses (see [Classic native r5](classic-native-r5.md)).
+- **TETHER** keeps the physics grip and the included OAR clasp poses.
 
 Classic is the default. An explicitly saved TETHER selection is preserved.
 
@@ -23,51 +23,64 @@ For manual configuration, set `[HandHolding] sMethod = classic` or `tether`.
 Unknown or missing values use Classic. Both methods remain experimental; Classic
 can still show wrist twisting, sliding or awkward turns with some actors.
 
+Bind **Controls > Hold hands** (`iHandHoldKey`) to turn hand holding on and off
+from the keyboard. It toggles the same setting as the menu and saves it.
+
+### Classic spacing and side
+
+- **Hand spacing** (`fClassicSpacing`, default 46, 36–56) is the distance between
+  the two actors' centres. The old fixed 35–40 put the shoulders together.
+- **Companion side** (`sClassicSide = nearest | left | right`). Nearest keeps the
+  side the companion arrives on. If your camera sits over one shoulder and the
+  companion fades out while holding hands, choose the other side.
+
+Changing either releases the grip, which forms again at the new position.
+While Classic holds hands (and during its final approach), character collision
+is off for both you and the companion, so neither can shove the other. It is
+restored on release. See [Classic comfort r4](classic-comfort-r4.md).
+
 The direct grip r4 update connects TETHER before alias cleanup. The follower
 holds their arrival position while physics is prepared, then changes movement
 control after the hands connect. There is no arrival dwell or gradual grip-gap
 widening. See [direct grip testing](tether-direct-r4.md).
 
-## Generate the optional clasp animations
+TETHER now updates the companion's facing throughout a connected hold. If their
+AI package changes, it renews the offset movement command. A companion who stays
+still while the player moves gets one movement retry, then releases back to
+ordinary following if the stall persists. See [movement r5](tether-movement-r5.md).
 
-These clips are required only for TETHER. The public mod contains no
-Skyrim-derived clasp clips. Without generated clips, TETHER acquisition stays
-disabled; Classic and the rest of Walk With Me still work.
+After the grip connects, the existing WWM route keeps following the player's
+side while alias cleanup is queued. It yields as soon as the alias or package
+is released; offset movement still waits for cleanup acknowledgment. This
+addresses the stationary wait observed with Inigo. See [handoff r6](tether-handoff-r6.md).
 
-1. Install Python 3.10 or later. The generator includes its codec source and
-   needs no Blender installation or additional Python packages.
-2. Extract the `meshes/actors/character/animations/male` and `female` folders
-   from **your own** `Skyrim - Animations.bsa` into a separate working folder,
-   using a BSA extraction tool. Use the vanilla clips, not animation replacers.
-3. Open a terminal in the extracted `ClaspGenerator` folder from the mod archive:
+## Clasp animations
 
-   ```powershell
-   py -3 build-tether-clasp-clips.py --animations "C:/Extracted/meshes/actors/character/animations" --output "C:/Generated/Walk-With-Me-0.2.2-Clasp"
-   ```
+TETHER uses 68 OAR clasp clips, included in the main download under
+`meshes/OpenAnimationReplacer/WWM Clasp`. Classic does not use them. Each clip is a
+vanilla idle, walk or run clip with WWM-authored arm, wrist and finger rotations.
+The legs, root motion, events and bindings are Skyrim's own. They play only while
+that actor holds a TETHER grip. No behavior regeneration is needed.
 
-4. The script checks all inputs, generates and validates 68 clips, then creates
-   `Walk-With-Me-0.2.2-Clasp.zip` beside the output folder. It will not overwrite
-   an existing output. Install that ZIP after the main mod in MO2 or Vortex.
-5. Restart Skyrim before testing. No behavior regeneration is needed for the
-   clasp clips. Optional command gestures have separate GPMA setup instructions.
+If you generated clasp clips yourself for an earlier version, disable or remove that
+mod (named like `Walk-With-Me-0.2.2-Clasp`). The included clips are identical. A
+clasp mod generated for 0.16.8 is worse: its OAR conditions require a plugin
+version above 0.2.x, so OAR never loads the clasp poses.
 
-Regenerate the clasp package when upgrading from a local 0.16.8 build. The new
-OAR condition files require plugin version 0.2.0 or later; the old higher version requirement
-would prevent those conditions from loading.
-
-Keep the generated ZIP local. It contains data from your own game files and is
-not part of the public download. The supplied rotation recipe is WWM-authored.
-The generator uses the unmodified [PyNifly codec](https://github.com/BadDogSkyrim/PyNifly)
-at revision `bcb723aba2ca4a80e976d957efbde69b33f2e56f`; source and license are included.
+The clips were made with the unmodified
+[PyNifly codec](https://github.com/BadDogSkyrim/PyNifly) at revision
+`bcb723aba2ca4a80e976d957efbde69b33f2e56f`. The generator, the codec's source and
+license, and the rotation recipe are in the source download. To rebuild the clips,
+see [build](build.md).
 
 ## Behavior and limitations
 
 The TETHER backend combines native approach, ticketed package handoff, a
 TETHER-based physics grip, and authored OAR clasp poses. The hands connect first;
 script cleanup and the engine package transition gate only the subsequent
-offset movement. Classic uses the
-earlier procedural arm/body-position backend and retains the native travel
-package with its original hand-holding movement pacing.
+offset movement. Classic approaches through WWM travel, connects with
+procedural arms, then hands the companion to the same ticketed offset movement.
+It writes no position, heading or gait once that movement is active.
 
 Sprinting, combat, drawn weapons, jumping, swimming, mounting, dialogue, scenes,
 rest, first person, blocked movement or excessive separation release the grip.
@@ -108,7 +121,7 @@ A `wrist=` figure that never falls near the limit means `fGripWristGap` is tight
 than this pair can achieve; raise it to just above the value the log settles at.
 Changing any of these releases a live grip so the constraint is rebuilt with them.
 
-While connected, the generated poses override matching locomotion replacements
+While connected, the clasp poses override matching locomotion replacements
 for those actors. Other replacers resume when the grip is released. Custom
 bodies, skeletons and non-interruptible animations can affect appearance and
 timing. Wrist contact, turning and transitions still need in-game evaluation.

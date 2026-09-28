@@ -24,6 +24,10 @@ namespace Wayfarer::HandHolding
         float palmX{0.0F}, palmY{-2.35F}, palmZ{5.0F};
         // Wrist separation the constraint is allowed to close when it is created.
         float gripGap{45.0F};
+        // Classic only: distance between the two actors' centres while holding, and the
+        // companion's side (0 = whichever side they are already nearer, -1 left, 1 right).
+        float spacing{46.0F};
+        int side{};
     };
 
     enum class Phase

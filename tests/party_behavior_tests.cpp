@@ -2,6 +2,7 @@
 #include "hud_notice.h"
 #include "party_behavior.h"
 #include "party_life.h"
+#include "travel_planner.h"
 #include "party_orders.h"
 #include "rest_activities.h"
 #include "rest_pose.h"
@@ -71,8 +72,10 @@ int main()
             }
             Check(eats == 80 && drinks == 20,
                   "ordinary interiors and town spaces favor food over tavern drinking");
-            Check(SettledRefreshments(context, {}), "settled refreshments cover homes and towns");
         }
+        Check(SettledRefreshments(RestContext::Interior, {}), "settled refreshments cover homes");
+        Check(!SettledRefreshments(RestContext::Settlement, {}),
+              "no refreshments out in a town's streets");
         Check(!SettledRefreshments(RestContext::Wilderness, {}),
               "new settled-place meals do not change wilderness behavior");
         ActivitySearch search;
@@ -226,6 +229,11 @@ int main()
     }
     Check(!MealsAllowed(RestContext::Dungeon, {}) && MealsAllowed(RestContext::Tavern, {}),
           "native meals follow the same context policy");
+    Check(!MealsAllowed(RestContext::Settlement, {}), "nobody eats standing in the middle of town");
+    for (unsigned roll = 0; roll < 1000; ++roll) {
+        const auto town = ChooseRestActivity(RestContext::Settlement, roll, {});
+        Check(town != RestActivity::Eat && town != RestActivity::Drink, "no street meals from the generic table");
+    }
     Check(!SandboxTuning{}.extraPoses, "native sandbox activities are the default");
     SandboxTuning gate;
     gate.startRadius = 150;
@@ -439,6 +447,22 @@ int main()
           "curious companions explore sooner than reserved companions");
     Check(WatchWeight(Personality::Watchful) > WatchWeight(Personality::Sociable),
           "watchful personality increases lookout preference");
+    for (int slot = 0; slot < PARTY_CAPACITY; ++slot) {
+        for (auto mode : {FormationMode::kDynamic, FormationMode::kLead, FormationMode::kCompanion,
+                          FormationMode::kRear}) {
+            const auto base = FormationPosition(mode, slot);
+            const auto pulled = PersonalOffset(base, Personality::Sociable);
+            const float from = std::hypot(base.lateral, base.longitudinal),
+                        to = std::hypot(pulled.lateral, pulled.longitudinal);
+            Check(to <= from && (from <= 95 || to >= 94.9F), "sociable companions walk nearer, never inside 95");
+            Check(from <= 140 || to < from * .75F, "noticeably nearer from further out");
+            Check((base.longitudinal > 0) == (pulled.longitudinal > 0) || base.longitudinal == 0,
+                  "still ahead in Lead and behind in Rear");
+            const auto same = PersonalOffset(base, Personality::Reserved);
+            Check(same.lateral == base.lateral && same.longitudinal == base.longitudinal,
+                  "other personalities keep their place");
+        }
+    }
     LookoutState watch;
     std::vector<WatchCandidate> watchers{{1, 4}, {2, 2}, {3, 1}};
     Check(!LookoutPermitted(true, true, true, true, 2, false),
@@ -512,9 +536,9 @@ int main()
     visibility.Update(3, {{1, {0, 0}}, {2, {80, 0}}}, [](auto, auto) { return false; });
     Check(visibility.gathering && !visibility.Listener(1) && !visibility.Listener(2),
           "companions never talk through walls; one walks around first");
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < orderCount; ++i) {
         Check(static_cast<int>(OrderMode(i)) == i,
-              "all six displayed options map to their matching formation");
+              "all seven displayed options map to their matching formation");
         Check(OrderSelection(i, 4, 0, true) == i,
               "number shortcut cannot be overwritten by another activation");
         Check(OrderSelection(-1, i, 0, true) == i,

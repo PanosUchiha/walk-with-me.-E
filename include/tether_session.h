@@ -42,6 +42,7 @@ namespace Wayfarer::HandHolding
     struct TetherSession
     {
         bool started{}, cancelled{}, player{}, follower{}, constraint{}, connected{}, offset{};
+        bool refreshOffset{};
         std::optional<TetherOp> pending;
         void Start()
         {
@@ -82,10 +83,19 @@ namespace Wayfarer::HandHolding
             if (!constraint) {
                 return TetherOp::Connect;
             }
-            if (!offset) {
+            if (!offset || refreshOffset) {
                 return TetherOp::Offset;
             }
             return {};
+        }
+        bool RefreshOffset()
+        {
+            if (!started || cancelled || !connected || !offset || pending || refreshOffset) {
+                return false;
+            }
+            // Keep ownership until ClearOffset succeeds, even if renewal fails.
+            refreshOffset = true;
+            return true;
         }
         bool Begin(TetherOp op)
         {
@@ -128,7 +138,8 @@ namespace Wayfarer::HandHolding
                 player = false;
                 break;
             case TetherOp::Offset:
-                offset = success;
+                offset = offset || success;
+                refreshOffset = false;
                 break;
             case TetherOp::ClearOffset:
                 offset = false;
@@ -202,7 +213,8 @@ namespace Wayfarer::HandHolding
 
     inline bool TetherRetainsApproach(const TetherSession& session, const TetherHandoff& handoff)
     {
-        return !handoff.actor && (!session.started || !session.cancelled);
+        return (!session.started || !session.cancelled) &&
+               (!handoff.actor || (session.connected && !session.offset && !handoff.cleanupComplete));
     }
 
     inline bool TetherNear(float distance, float height, bool visible, float limit)

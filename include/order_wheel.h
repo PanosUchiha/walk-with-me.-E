@@ -7,7 +7,7 @@ namespace Wayfarer
     namespace Wheel
     {
         constexpr float pi = 3.14159265359F;
-        constexpr int count = 6;
+        constexpr int count = 7; // The six orders plus Custom.
         inline float Width(float screenWidth, float screenHeight)
         {
             return std::min(680.0F * std::clamp(screenHeight / 1080.0F, .75F, 1.5F),
@@ -23,8 +23,10 @@ namespace Wayfarer
             return {width * (index ? .51F : .07F), width * .94F, width * .42F, width * .12F};
         }
         constexpr float sectorDegrees = 360.0F / count;
-        constexpr std::array<int, count> clockwise{1, 2, 3, 5, 4, 0};
-        constexpr std::array<int, count> slots{5, 0, 1, 2, 4, 3};
+        // Clockwise from the top: Lead, Companion, Rear, Custom, Vanilla, Relax, Natural. The
+        // travel formations sit together on the right; resting and handing back on the left.
+        constexpr std::array<int, count> clockwise{1, 2, 3, 6, 5, 4, 0};
+        constexpr std::array<int, count> slots{6, 0, 1, 2, 5, 4, 3};
         inline float Angle(int mode)
         {
             return (-90.0F + sectorDegrees * slots[std::clamp(mode, 0, count - 1)]) * pi / 180;

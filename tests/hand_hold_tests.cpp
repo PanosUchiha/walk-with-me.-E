@@ -222,6 +222,73 @@ int main()
               "close lateral spacing cannot capture a trailing follower");
         check(!ReadyAtHand(-40.0F * side, 0, side, 40), "contact cannot jump to the opposite hand");
     }
+    check(ClassicSpacing(Tuning{}.spacing) == 46 && ClassicSpacing(20) == 36 && ClassicSpacing(90) == 56 &&
+              ClassicSpacing(std::numeric_limits<float>::quiet_NaN()) == 46,
+          "Classic spacing defaults to 46 and stays within 36-56");
+    check(ClassicSide(0, -3) == -1 && ClassicSide(0, 3) == 1 && ClassicSide(-1, 50) == -1 &&
+              ClassicSide(1, -50) == 1 && ClassicSide(-7, 50) == -1,
+          "a chosen side overrides the companion's current side; Nearest keeps it");
+    for (float spacing : {36.0F, 46.0F, 56.0F}) {
+        for (float side : {-1.0F, 1.0F}) {
+            // Shoulder joints ~12 units from the spine and 38-unit arms (34 for a smaller
+            // body), grip placed as Classic does: 76% of reach below the shoulders.
+            for (float arm : {34.0F, 38.0F}) {
+                const Point inner{side * 12, 0, 100}, outer{side * (spacing - 12), 0, 100};
+                auto preferred = (inner + outer) * .5F;
+                preferred.z -= arm * .76F;
+                preferred.y += 4;
+                const auto grip = SharedTarget(inner, arm * .94F, outer, arm * .94F, preferred);
+                const int s = side < 0 ? -1 : 1;
+                const auto mine = InterlockedHand(grip.value_or(Point{}), {0, 1, 0}, {1, 0, 0}, s, true);
+                const auto theirs = InterlockedHand(grip.value_or(Point{}), {0, 1, 0}, {1, 0, 0}, s, false);
+                check(grip && Length(mine.wrist - inner) < arm * .97F &&
+                          Length(theirs.wrist - outer) < arm * .97F,
+                      "every Classic spacing keeps both clasp wrists within reach");
+            }
+            check(ReadyAtHand(spacing * side, 0, side, spacing) && !ReadyAtHand(-spacing * side, 0, side, spacing),
+                  "contact begins at the configured spacing, on the chosen side only");
+        }
+    }
+    // Interlocked clasp: player at the origin, companion `side` along +x, walking +y.
+    for (int side : {-1, 1}) {
+        const Point grip{side * 23.0F, 0, 70}, ahead{0, 1, 0}, across{1, 0, 0};
+        const auto mine = InterlockedHand(grip, ahead, across, side, true);
+        const auto theirs = InterlockedHand(grip, ahead, across, side, false);
+        check(mine.palm.y < -.99F && theirs.palm.y > .99F,
+              "the palms press front to back: the player's faces back, the companion's forward");
+        const auto myPalm = mine.wrist + mine.along * claspPalm, theirPalm = theirs.wrist + theirs.along * claspPalm;
+        check(Length(myPalm - theirPalm - ahead * (2 * claspDepth)) < 1e-4F,
+              "the palm centres meet at the grip, one hand's depth apart");
+        check((mine.wrist.x - grip.x) * side < -1 && (theirs.wrist.x - grip.x) * side > 1,
+              "each wrist stays on its owner's side of the centre line");
+        const auto myTips = mine.wrist + mine.along * 12, theirTips = theirs.wrist + theirs.along * 12;
+        check((myTips.x - grip.x) * side > 1 && (theirTips.x - grip.x) * side < -1,
+              "each hand's fingers reach across the centre line, over the other hand");
+        check(std::abs(Dot(mine.along, mine.palm)) < 1e-5F && mine.along.z < -.8F,
+              "fingers point down and across, perpendicular to the palm");
+
+        // The player's hand hanging naturally: fingers down, index side forward, palm
+        // toward their own body. The old clasp turned that palm to face the companion.
+        const Point along{0, 0, -1}, hand{0, 1, 0};
+        const bool left = side < 0;
+        const Point natural = Cross(hand, along) * (left ? -1.0F : 1.0F);
+        const auto aligned = WristAlignment(along, hand, left, mine.palm, mine.along);
+        check(aligned && Length(Transform(*aligned, along) - mine.along) < 1e-4F,
+              "the aligned hand points its fingers along the clasp direction");
+        const Point palmNow = Cross(hand, along) * (left ? -1.0F : 1.0F);
+        check(aligned && Length(Transform(*aligned, palmNow) - mine.palm) < 1e-4F,
+              "the aligned hand turns its palm to the clasp normal");
+        const float roll = TwistAbout(along, hand, Transform(*aligned, hand));
+        const auto oldPalm = Point{static_cast<float>(side), 0, 0};
+        const auto old = WristAlignment(along, hand, left, oldPalm);
+        const float oldRoll = old ? TwistAbout(along, hand, Transform(*old, hand)) : 0;
+        check(natural.x * side < 0, "fixture: a hanging hand's palm faces its own body");
+        check(std::abs(roll) < 1.75F && std::abs(oldRoll) > 3.0F,
+              "the clasp rolls the wrist about 90 degrees; the old palm-to-palm pose needed 180");
+    }
+    check(std::abs(TwistAbout({0, 0, 1}, {1, 0, 0}, {0, 1, 0}) - 1.5707964F) < 1e-5F &&
+              std::abs(TwistAbout({0, 0, 1}, {1, 0, 5}, {1, 0, -3})) < 1e-5F,
+          "twist measures only the rotation about the axis");
 
     // Rumarin's six 22:56 Classic grips all released on the first idle travel
     // update. Exercise the production fallback with the real ground tracers.

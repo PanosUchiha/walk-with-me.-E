@@ -19,7 +19,9 @@ class AnimationPackageTests(unittest.TestCase):
         self.assertFalse(any(n.startswith('Nemesis_Engine/') for n in base))
         self.assertFalse(any('Walk With Me Signals/' in n for n in base))
         self.assertFalse(any('Walk With Me Victory/' in n for n in files))
-        self.assertFalse(any('WWM Clasp/' in n for n in files))
+        # The hand-clasp clips ship in the base archive, never with the optional gestures.
+        self.assertEqual(sum('WWM Clasp/' in n and n.endswith('.hkx') for n in base), 68)
+        self.assertFalse(any('WWM Clasp/' in n for n in gestures))
 
     def test_shipped_patch(self):
         verify_patch(ROOT / 'package/Nemesis_Engine/mod/gpma/0_master')

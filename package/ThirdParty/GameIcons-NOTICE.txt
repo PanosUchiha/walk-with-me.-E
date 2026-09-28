@@ -6,6 +6,28 @@ Campfire by Lorc: https://game-icons.net/1x1/lorc/campfire.html
 Teleport by Lorc: https://game-icons.net/1x1/lorc/teleport.html
 Viking shield by Delapouite: https://game-icons.net/1x1/delapouite/viking-shield.html
 Locked chest by Lorc: https://game-icons.net/1x1/lorc/locked-chest.html
+Compass by Lorc: https://game-icons.net/1x1/lorc/compass.html
+
+Custom formation emblems:
+Three friends by Delapouite: https://game-icons.net/1x1/delapouite/three-friends.html
+Knight banner by Delapouite: https://game-icons.net/1x1/delapouite/knight-banner.html
+Crown by Lorc: https://game-icons.net/1x1/lorc/crown.html
+Castle by Delapouite: https://game-icons.net/1x1/delapouite/castle.html
+Crossed swords by Lorc: https://game-icons.net/1x1/lorc/crossed-swords.html
+Dragon head by Lorc: https://game-icons.net/1x1/lorc/dragon-head.html
+Wolf head by Lorc: https://game-icons.net/1x1/lorc/wolf-head.html
+Raven by Lorc: https://game-icons.net/1x1/lorc/raven.html
+Stag head by Lorc: https://game-icons.net/1x1/lorc/stag-head.html
+Horse head by Delapouite: https://game-icons.net/1x1/delapouite/horse-head.html
+Pine tree by Lorc: https://game-icons.net/1x1/lorc/pine-tree.html
+Rune stone by Lorc: https://game-icons.net/1x1/lorc/rune-stone.html
+Eye shield by Lorc: https://game-icons.net/1x1/lorc/eye-shield.html
+Moon by Lorc: https://game-icons.net/1x1/lorc/moon.html
+Meditation by Lorc: https://game-icons.net/1x1/lorc/meditation.html
+Beer stein by Lorc: https://game-icons.net/1x1/lorc/beer-stein.html
+
+Retained source artwork, no longer used in the interface:
+Walking scout by Delapouite: https://game-icons.net/1x1/delapouite/walking-scout.html
 
 Licensed under Creative Commons Attribution 3.0 Unported (CC BY 3.0).
 License: https://creativecommons.org/licenses/by/3.0/

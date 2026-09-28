@@ -19,8 +19,11 @@ Third-party files keep their own licenses:
   and linking exceptions; see `third_party/OpenAnimationReplacer` and the
   corresponding `package/ThirdParty/OpenAnimationReplacer-*` notices.
 - Bundled PyNifly animation codec: GPL-3.0, with its upstream source and license.
-  Generated clasp clips are made locally from the player's own game and are excluded
-  from public binary and source downloads.
+  Only the clasp generator in the source download uses it.
+- Hand-clasp clips (`meshes/OpenAnimationReplacer/WWM Clasp`): Skyrim's vanilla
+  locomotion animations with WWM-authored arm, wrist and finger rotations. They
+  contain Bethesda game data, are not covered by the GPL, and are provided only for
+  use with Skyrim.
 - Cinzel Decorative: OFL-1.1.
 - Credited Game-icons.net artwork: CC-BY-3.0.
 - TETHER travel-speed hook reference and physics adaptation: MIT,

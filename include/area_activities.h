@@ -143,14 +143,52 @@ namespace Wayfarer
         return !OutdoorPlace(place) && place != RestPlace::Cave && place != RestPlace::Ruin;
     }
 
-    // What to do on arriving at a feature.
+    // Eating and drinking look natural at a table, at the bar or round a campfire. A town street,
+    // a temple, a shop counter or a crypt is none of those; companions standing in the middle of
+    // town eating bread was the worst of it.
+    inline bool MealPlace(RestPlace place, bool atFire)
+    {
+        switch (place) {
+        case RestPlace::Tavern:
+        case RestPlace::Home:
+        case RestPlace::PlayerHome:
+        case RestPlace::Hall:
+            return true;
+        case RestPlace::Wild:
+            return atFire; // A meal at camp.
+        default:
+            return false;
+        }
+    }
+
+    // Skyrim's own sandbox meals (the package's Allow Eating). A short stop, which is what
+    // temporary rest is, only eats at the inn.
+    inline bool NativeMeals(RestPlace place, RestContext context, bool atFire, bool settled,
+                            const SandboxTuning& tuning)
+    {
+        return tuning.meals && context != RestContext::Dungeon && MealPlace(place, atFire) &&
+               (settled || place == RestPlace::Tavern);
+    }
+
+    // Reading wants somewhere quiet and safe; not a street, a shop floor or a crypt.
+    inline bool ReadingPlace(RestPlace place)
+    {
+        return place != RestPlace::Town && place != RestPlace::Shop && place != RestPlace::Cave &&
+               place != RestPlace::Ruin;
+    }
+
+    // No limbering up in front of an altar or a shopkeeper.
+    inline bool StretchingPlace(RestPlace place) { return place != RestPlace::Temple && place != RestPlace::Shop; }
+
+    // What to do on arriving at a feature. A short stop (temporary rest) does not sit down.
     inline RestActivity FeatureActivity(AreaFeature feature, RestPlace place, std::uint32_t roll,
-                                        const SandboxTuning& tuning)
+                                        const SandboxTuning& tuning, bool settled = true)
     {
         switch (feature) {
         case AreaFeature::Fire:
             if (place == RestPlace::Wild) {
-                return tuning.groundSitting && roll % 2 ? RestActivity::Ground : RestActivity::WarmHandsCrouched;
+                return settled && tuning.groundSitting && roll % 2 ? RestActivity::Ground
+                                                                   : RestActivity::WarmHandsCrouched;
             }
             return place == RestPlace::Cave || place == RestPlace::Ruin ? RestActivity::WarmHandsCrouched
                                                                        : RestActivity::WarmHands;
@@ -169,11 +207,15 @@ namespace Wayfarer
 
     // What to do next while still at the feature, once the first pose ends.
     inline RestActivity FeatureFollowUp(AreaFeature feature, RestPlace place, std::uint32_t roll,
-                                        const SandboxTuning& tuning)
+                                        const SandboxTuning& tuning, bool settled = true)
     {
         switch (feature) {
         case AreaFeature::Fire:
-            return FeatureActivity(feature, place, roll, tuning); // Stay by the fire.
+            // A camp is where the wilderness meal happens; otherwise stay by the fire.
+            if (place == RestPlace::Wild && settled && tuning.meals && roll % 4 == 0) {
+                return RestActivity::Eat;
+            }
+            return FeatureActivity(feature, place, roll, tuning, settled);
         case AreaFeature::Shrine:
             return roll % 3 ? RestActivity::Stand : RestActivity::Pray;
         case AreaFeature::Stone:
@@ -240,10 +282,16 @@ namespace Wayfarer
         return feature == AreaFeature::Fire || feature == AreaFeature::Shrine || feature == AreaFeature::Stone;
     }
 
-    // Poses chosen while resting with nothing in particular to walk to. The
-    // generic table needs Extra rest poses; the place table needs Area activities.
+    // Poses chosen while resting with nothing in particular to walk to. The generic table needs
+    // Extra rest poses; the place table needs Area activities. Every entry has to suit the place:
+    // no meals in the street, no stretching before an altar, no reading in a crypt.
+    //
+    // `settled` is a Relax order. Temporary rest is a short stop while the player looks around, so
+    // it keeps to brief standing poses: eating, reading, sitting on the ground, studying and chores
+    // wait for a real rest. The inn is the exception; holding a drink there is what waiting looks like.
     inline RestActivity ChoosePlaceActivity(RestPlace place, RestContext context, std::uint32_t roll,
-                                            const SandboxTuning& tuning, const PlaceTraits& traits)
+                                            const SandboxTuning& tuning, const PlaceTraits& traits,
+                                            bool settled = true)
     {
         std::array<RestActivity, 40> choices{};
         int count = 0;
@@ -252,29 +300,34 @@ namespace Wayfarer
                 choices[count++] = activity;
             }
         };
+        const bool tavern = place == RestPlace::Tavern;
+        const bool dungeon =
+            context == RestContext::Dungeon || place == RestPlace::Cave || place == RestPlace::Ruin;
+        // Scripted food and drink are held standing, so only where people eat on their feet: the
+        // inn and the player's own house. Other homes and halls eat at their tables through
+        // Skyrim's own sandbox meals.
+        const bool refreshments = tuning.meals && !dungeon && (tavern || (settled && place == RestPlace::PlayerHome));
         if (tuning.extraPoses) {
-            if (context == RestContext::Wilderness && tuning.groundSitting) {
+            if (settled && place == RestPlace::Wild && tuning.groundSitting) {
                 add(RestActivity::Ground, 3);
             }
-            if (MealsAllowed(context, tuning)) {
-                add(RestActivity::Eat, context == RestContext::Tavern ? 2 : 1);
-                if (context == RestContext::Tavern) {
-                    add(RestActivity::Drink, 4);
-                }
+            if (refreshments) {
+                add(RestActivity::Eat, tavern ? 2 : 1);
+                add(RestActivity::Drink, tavern ? 4 : 1);
             }
-            if (tuning.reading && context != RestContext::Dungeon) {
-                add(RestActivity::Read, 2);
+            if (tuning.reading && settled && ReadingPlace(place) && !dungeon) {
+                add(RestActivity::Read, place == RestPlace::Wild ? 1 : 2);
             }
-            if (tuning.stretching) {
+            if (tuning.stretching && StretchingPlace(place)) {
                 add(RestActivity::Stretch, 1);
             }
-            add(RestActivity::Examine, context == RestContext::Dungeon ? 5 : 1);
+            add(RestActivity::Examine, dungeon ? 5 : place == RestPlace::Temple ? 0 : 1);
         }
-        else if (SettledRefreshments(context, tuning)) {
-            const bool tavern = context == RestContext::Tavern;
+        else if (refreshments) {
             add(RestActivity::Drink, tavern ? 4 : 1);
-            add(RestActivity::Eat, tavern ? 1 : 4);
+            add(RestActivity::Eat, 1);
         }
+        const int longer = settled ? 1 : 0; // Loops that belong to a real rest.
         if (tuning.areaActivities) {
             switch (place) {
             case RestPlace::Wild:
@@ -288,26 +341,27 @@ namespace Wayfarer
                 add(RestActivity::WarmArms, traits.cold ? 2 : 0);
                 break;
             case RestPlace::Home:
-                add(RestActivity::Study, 2);
+                add(RestActivity::Study, 2 * longer);
                 add(RestActivity::Stand, 1);
                 break;
             case RestPlace::PlayerHome:
-                add(RestActivity::Sweep, 2);
-                add(RestActivity::Study, 1);
+                add(RestActivity::Sweep, 2 * longer);
+                add(RestActivity::Study, longer);
+                add(RestActivity::Stand, 1 - longer);
                 break;
             case RestPlace::Temple:
                 add(RestActivity::Pray, 3);
-                add(RestActivity::Study, 1);
+                add(RestActivity::Study, longer);
                 add(RestActivity::Stand, 2);
                 break;
             case RestPlace::Shop:
                 add(RestActivity::Examine, 2);
-                add(RestActivity::Study, 2);
+                add(RestActivity::Study, 2 * longer);
                 add(RestActivity::Stand, 1);
                 break;
             case RestPlace::Hall:
                 add(RestActivity::Stand, 3);
-                add(RestActivity::Study, 1);
+                add(RestActivity::Study, longer);
                 break;
             case RestPlace::Tavern:
                 add(RestActivity::Stand, 1);
@@ -322,7 +376,7 @@ namespace Wayfarer
                 break;
             case RestPlace::Ruin:
                 add(RestActivity::Examine, 3);
-                add(RestActivity::Study, 1);
+                add(RestActivity::Study, longer);
                 add(RestActivity::Nervous, 1);
                 add(RestActivity::LookFar, 1);
                 add(RestActivity::CleanSword, traits.sword ? 1 : 0);

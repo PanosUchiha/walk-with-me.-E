@@ -129,6 +129,20 @@ namespace
     {
         return Wayfarer::FormationController::GetSingleton().ShouldSuspendForDialogue();
     }
+    bool AliasSyncAllowed(RE::StaticFunctionTag*, std::int32_t ticket, std::int32_t session)
+    {
+        return Wayfarer::FormationController::GetSingleton().AliasSyncAllowed(ticket, session);
+    }
+    void ReportAliasLook(RE::StaticFunctionTag*, std::int32_t slot, RE::Actor* actor, RE::Actor* target,
+                         std::int32_t ticket, std::int32_t session)
+    {
+        Wayfarer::FormationController::GetSingleton().ReportAliasLook(slot, actor, target, ticket, session);
+    }
+    void ReportAliasCleanup(RE::StaticFunctionTag*, std::int32_t slot, bool pending, std::int32_t ticket,
+                            std::int32_t session)
+    {
+        Wayfarer::FormationController::GetSingleton().ReportAliasCleanup(slot, pending, ticket, session);
+    }
     void ReportAliasSync(RE::StaticFunctionTag*, bool busy)
     {
         Wayfarer::FormationController::GetSingleton().ReportAliasSync(busy);
@@ -197,6 +211,9 @@ namespace Wayfarer::Papyrus
         a_vm->RegisterFunction("HasRestActivities", SCRIPT_NAME, HasRestActivities);
         a_vm->RegisterFunction("HasSocialGroup", SCRIPT_NAME, HasSocialGroup);
         a_vm->RegisterFunction("ShouldSuspendForDialogue", SCRIPT_NAME, ShouldSuspendForDialogue);
+        a_vm->RegisterFunction("AliasSyncAllowed", SCRIPT_NAME, AliasSyncAllowed);
+        a_vm->RegisterFunction("ReportAliasLook", SCRIPT_NAME, ReportAliasLook);
+        a_vm->RegisterFunction("ReportAliasCleanup", SCRIPT_NAME, ReportAliasCleanup);
         a_vm->RegisterFunction("ReportAliasSync", SCRIPT_NAME, ReportAliasSync);
         a_vm->RegisterFunction("HoldState", "WayfarerVictoryVoice", VictoryHoldState);
         a_vm->RegisterFunction("ReportSocialIdle", SCRIPT_NAME, ReportSocialIdle);

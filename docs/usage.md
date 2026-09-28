@@ -84,26 +84,41 @@ companion after the menu closes. **Cancel** (Esc / gamepad B) dismisses the pane
 - Rear: follow behind.
 - Relax: stay near the rest point until another order.
 - Vanilla: return control to Skyrim or your follower framework.
+- Custom: the formation you drew under Travel > Custom formation. The wedge stays dimmed
+  until one is saved. See [custom-formation.md](custom-formation.md).
 
-Open the wheel with its assigned key. Use 1-6, arrows and Enter, or mouse clicks.
+Sociable companions walk about 30% closer to you than their place in Natural, Lead,
+Companion and Rear, but never inside 95 units. In Natural, Lead and Companion, the
+**Pathfinder** option has a companion point out places you have never found; see
+[pathfinder.md](pathfinder.md).
+
+Open the wheel with its assigned key. Use 1-6, Left/Right and Enter, or mouse clicks.
 Escape closes it. On gamepad, hold LB and click the right stick; aim with the
-right stick, confirm with A, cancel with B. Releasing the stick issues no order.
+right stick or D-pad left/right, confirm with A, cancel with B. Releasing the stick
+issues no order.
 
-Two mouse controls sit below the wheel:
+**Party actions** is a second page under the wheel. Reach it through the
+translucent bar at the bottom, D-pad down, the Down arrow, Tab or the mouse wheel.
+Go back with the bar at the top, D-pad up from the top row, Tab, the mouse wheel,
+Escape or B. It is a 3 x 2 grid in the wheel's style with yellow accents:
 
 - **Teleport party** closes the menu and brings eligible travelling companions
   to nearby ground, including companions available from active follower slots
-  in other cells. It works in combat and on horseback. Waiting, excluded,
-  scripted, seated and riding companions stay put, and the notification names
-  them. The button shows the available count or why teleport is unavailable.
+  in other cells. It works in combat, on horseback and while you sit. Waiting,
+  excluded, scripted and riding companions stay put, and the notification names
+  them. The tile shows the available count or why teleport is unavailable.
   See [teleport.md](teleport.md).
-- **Temporary relaxation** toggles automatic rest when you stop and saves the
-  preference immediately. Turning it off leaves the explicit **Relax** order
-  available. This is the same setting as **Temporary rest** under Rest.
+- **Temporary rest** toggles automatic rest when you stop and saves it at once.
+  The explicit **Relax** order stays available.
+- **Companion control** opens the take/release panel for the companion you were
+  looking at when you opened the menu (also C, or X on gamepad, from either page).
+- **Hold hands**, **Loot scouting** and **Walk With Me** switch those features on
+  or off and save immediately, like their settings.
 
-These controls have hover animations and an animated toggle. They do not add
-gamepad bindings or change the six wheel directions. See
-[Party Orders details](party-orders-utilities.md).
+Choose with the mouse, arrows or D-pad; select with a click, Enter, A or 1-6. A
+line under the grid explains the focused tile, and an unavailable tile says why.
+Tiles rise in one after another, a yellow frame glides to the focused tile, and
+the switches animate. See [party-actions-grid.md](party-actions-grid.md).
 
 Change keys under Controls. Shift, Ctrl and Alt combinations work; matching is
 exact. Escape cancels capture, Delete clears it. See hotkeys.md in the source.
@@ -162,14 +177,16 @@ Gestures skip busy states. Vanilla has no signal. Gesture Animation Remix is not
 Hand holding is experimental and off by default. Select one follower and use
 Companion mode in third person. Choose **Classic** in Travel's
 **Hand-holding method** selector for the earlier procedural hand holding without
-generated clasp clips, or keep **TETHER** for the physics grip. Switching releases
-the current grip before reconnecting. See [hand holding](hand-holding.md).
+clasp clips, or keep **TETHER** for the physics grip. Switching releases
+the current grip before reconnecting. Classic also offers **Hand spacing** and
+**Companion side**. Bind **Controls > Hold hands** to turn hand holding on and off
+without opening the menu. See [hand holding](hand-holding.md).
 
 With TETHER, the follower approaches your side through normal pathfinding.
 Pause to let them arrive, turn and connect. The hands connect before movement
 handoff; script cleanup still gates subsequent offset movement. Dialogue and
 sprinting release the grip. Hand holding adds no speed boost or player slowdown.
-TETHER requires OAR and locally generated clasp poses; Classic does not.
+TETHER requires OAR (its clasp poses are included); Classic does not.
 See [hand holding](hand-holding.md) for setup, tuning and current limitations.
 Physics, offset movement and the speed hook credit
 [TETHER](https://github.com/Kei-BWV997/TETHER) by **KEI997** under MIT.

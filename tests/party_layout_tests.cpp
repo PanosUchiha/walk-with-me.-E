@@ -64,6 +64,43 @@ int main()
             Check(roles[i] == 9 - i, "ten-member matching chooses nearby positions");
         }
         Check(AssignNearestRoles({}, {}, {}).empty(), "empty party is supported");
+        {
+            RoleDebounce hold;
+            const std::vector<int> now{0, 1, 2}, swapped{1, 0, 2}, other{0, 2, 1};
+            Check(hold.Update(now, now, .5F).empty(), "an unchanged assignment applies nothing");
+            Check(hold.Update(now, swapped, .5F).empty(), "a new assignment waits");
+            Check(hold.Update(now, swapped, .5F).empty() && hold.Update(now, swapped, .5F).empty(),
+                  "it keeps waiting for the hold");
+            Check(hold.Update(now, swapped, .5F) == swapped, "a proposal that keeps winning is applied");
+            Check(hold.Update(now, swapped, .5F).empty(), "the hold restarts after applying");
+            hold.Reset();
+            for (int i = 0; i < 20; ++i) {
+                Check(hold.Update(now, i % 2 ? swapped : other, .5F).empty(),
+                      "alternating proposals never move anyone");
+            }
+            Check(hold.Update(now, swapped, .5F).empty() && hold.Update(now, now, .5F).empty() &&
+                      hold.Update(now, swapped, .5F).empty(),
+                  "going back to the current roles cancels the wait");
+            for (int i = 0; i < 10; ++i) {
+                Check(hold.Update(now, other, 0).empty(), "no time passes while someone detours");
+            }
+            Check(hold.Update(std::vector<int>{0, -1, 2}, std::vector<int>{0, 1, 2}, 0) ==
+                      std::vector<int>({0, 1, 2}),
+                  "a companion who just joined is placed at once");
+            Check(hold.Update(std::vector<int>{0, 0, 2}, std::vector<int>{0, 1, 2}, 0) ==
+                      std::vector<int>({0, 1, 2}),
+                  "repeated roles are repaired at once");
+        }
+        {
+            // Two companions trailing their places, each stepped 30 units past the middle (round a
+            // rock): swapping saves 36,000. The old 80-unit penalty (12,800 for the pair) swapped
+            // them across the formation; the new one (80,000) keeps them.
+            const std::vector<Vec2> walkers{{30, -380}, {-30, -380}}, places{{-150, 0}, {150, 0}};
+            Check(AssignNearestRoles(walkers, places, std::vector<int>{0, 1}, 80) == std::vector<int>({1, 0}),
+                  "the old penalty swapped sides for a sideways step");
+            Check(AssignNearestRoles(walkers, places, std::vector<int>{0, 1}) == std::vector<int>({0, 1}),
+                  "a sideways step no longer swaps sides");
+        }
         Check(AssignNearestRoles(actors, std::span<const Vec2>(goals).first(9), old).empty(),
               "mismatched input cannot partially assign party");
 

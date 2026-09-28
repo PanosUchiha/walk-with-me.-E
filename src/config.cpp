@@ -36,6 +36,8 @@ namespace
             return Wayfarer::FormationMode::kSandbox;
         case 5:
             return Wayfarer::FormationMode::kVanilla;
+        case 6:
+            return Wayfarer::FormationMode::kCustom;
         default:
             return Wayfarer::FormationMode::kDynamic;
         }
@@ -159,9 +161,54 @@ namespace Wayfarer
         hands.palmY = number("HandHolding", "fPalmY", hands.palmY, -15.0F, 15.0F);
         hands.palmZ = number("HandHolding", "fPalmZ", hands.palmZ, -15.0F, 15.0F);
         hands.gripGap = number("HandHolding", "fGripWristGap", hands.gripGap, 8.0F, 45.0F);
+        hands.spacing = number("HandHolding", "fClassicSpacing", hands.spacing, 36.0F, 56.0F);
+        const auto side = Lower(Trim(ini.GetValue("HandHolding", "sClassicSide", "nearest")));
+        hands.side = side == "left" ? -1 : side == "right" ? 1 : 0;
         data.hudVertical = number("Interface", "fHUDVertical", data.hudVertical, 0.1F, 0.85F);
         data.releaseDistance = number("Safety", "fReleaseDistance", data.releaseDistance, 500.0F, 10000.0F);
+        {
+            // [CustomFormation]: iPositions, then per position (1-based) fPositionNSide (+ right),
+            // fPositionNAhead (+ ahead), and optionally sPositionNCompanion / sPositionNName.
+            auto& custom = data.customFormation;
+            custom.count = static_cast<int>(
+                std::clamp<long>(ini.GetLongValue("CustomFormation", "iPositions", 0), 0, PARTY_CAPACITY));
+            for (int i = 0; i < custom.count; ++i) {
+                const auto key = [&](const char* field) { return fmt::format("{}Position{}{}", field[0], i + 1, field + 1); };
+                custom.slots[i].lateral =
+                    static_cast<float>(ini.GetDoubleValue("CustomFormation", key("fSide").c_str(), 0));
+                custom.slots[i].longitudinal =
+                    static_cast<float>(ini.GetDoubleValue("CustomFormation", key("fAhead").c_str(), -150));
+                custom.companions[i] = Trim(ini.GetValue("CustomFormation", key("sCompanion").c_str(), ""));
+                custom.names[i] = Trim(ini.GetValue("CustomFormation", key("sName").c_str(), ""));
+            }
+            custom.title = ini.GetValue("CustomFormation", "sTitle", "Custom");
+            custom.emblem = Custom::EmblemFromKey(Lower(Trim(ini.GetValue("CustomFormation", "sEmblem", "band"))));
+            custom = Custom::Sanitize(custom);
+            if (data.mode == FormationMode::kCustom && !custom.Defined()) {
+                data.mode = FormationMode::kDynamic;
+            }
+        }
         data.teleportCatchup = ini.GetBoolValue("Movement", "bTeleportCatchup", data.teleportCatchup);
+        data.holdRelaxing = ini.GetBoolValue("Movement", "bHoldRelaxingCompanions", data.holdRelaxing);
+        {
+            // [Pathfinder]; 0.2.3 test builds kept only [Movement] bPathfinder.
+            auto& p = data.pathfinder;
+            p.enabled = ini.GetBoolValue("Pathfinder", "bEnabled", ini.GetBoolValue("Movement", "bPathfinder", p.enabled));
+            p.companion = Lower(Trim(ini.GetValue("Pathfinder", "sCompanion", "")));
+            p.companionName = Trim(ini.GetValue("Pathfinder", "sCompanionName", ""));
+            p.range = number("Pathfinder", "fRange", p.range, 3000.0F, 12000.0F);
+            // fRunAhead (200-600, ahead of the player) is not carried over: the run now heads
+            // for the place and goes much further.
+            p.run = number("Pathfinder", "fRunToward", p.run, 400.0F, 3000.0F);
+            p.resume = number("Pathfinder", "fResume", p.resume, 200.0F, 1200.0F);
+            p.lead = ini.GetBoolValue("Pathfinder", "bLead", p.lead);
+            p.icon = ini.GetBoolValue("Pathfinder", "bIcon", p.icon);
+            p.cooldown = number("Pathfinder", "fCooldown", p.cooldown, 20.0F, 300.0F);
+            p.wave = ini.GetBoolValue("Pathfinder", "bWave", p.wave);
+            p.notice = ini.GetBoolValue("Pathfinder", "bNotice", p.notice);
+        }
+        data.replaceFrameworkCatchup =
+            ini.GetBoolValue("Compatibility", "bReplaceNFFCatchup", data.replaceFrameworkCatchup);
         data.forwardCollision = ini.GetBoolValue("Movement", "bForwardCollision", data.forwardCollision);
         data.teleportDistance =
             number("Movement", "fTeleportDistance", data.teleportDistance, 1500.0F, 15000.0F);
@@ -306,6 +353,11 @@ namespace Wayfarer
         ini.SetDoubleValue("HandHolding", "fPalmY", value.handHolding.palmY);
         ini.SetDoubleValue("HandHolding", "fPalmZ", value.handHolding.palmZ);
         ini.SetDoubleValue("HandHolding", "fGripWristGap", value.handHolding.gripGap);
+        ini.SetDoubleValue("HandHolding", "fClassicSpacing", value.handHolding.spacing);
+        ini.SetValue("HandHolding", "sClassicSide",
+                     value.handHolding.side < 0   ? "left"
+                     : value.handHolding.side > 0 ? "right"
+                                                  : "nearest");
         ini.SetLongValue("Hotkeys", "iGamepadWheelBinding", value.gamepadBinding);
         ini.SetBoolValue("Debug", "bLogDiagnostics", value.logDiagnostics);
         ini.SetBoolValue("Debug", "bTraceMovement", value.traceMovement);
@@ -325,7 +377,38 @@ namespace Wayfarer
         SaveHotkeys(ini, value);
         ini.SetDoubleValue("Movement", "fDistantCatchupStart", value.distantCatchupStart);
         ini.SetDoubleValue("Movement", "fDistantCatchupEnd", value.distantCatchupEnd);
+        {
+            ini.Delete("CustomFormation", nullptr);
+            const auto custom = Custom::Sanitize(value.customFormation);
+            ini.SetValue("CustomFormation", "sTitle", custom.title.c_str());
+            ini.SetValue("CustomFormation", "sEmblem", Custom::emblems[custom.emblem].key);
+            ini.SetLongValue("CustomFormation", "iPositions", custom.count);
+            for (int i = 0; i < custom.count; ++i) {
+                const auto key = [&](const char* field) { return fmt::format("{}Position{}{}", field[0], i + 1, field + 1); };
+                ini.SetDoubleValue("CustomFormation", key("fSide").c_str(), custom.slots[i].lateral);
+                ini.SetDoubleValue("CustomFormation", key("fAhead").c_str(), custom.slots[i].longitudinal);
+                if (!custom.companions[i].empty()) {
+                    ini.SetValue("CustomFormation", key("sCompanion").c_str(), custom.companions[i].c_str());
+                    ini.SetValue("CustomFormation", key("sName").c_str(), custom.names[i].c_str());
+                }
+            }
+        }
         ini.SetBoolValue("Movement", "bTeleportCatchup", value.teleportCatchup);
+        ini.SetBoolValue("Movement", "bHoldRelaxingCompanions", value.holdRelaxing);
+        ini.Delete("Movement", "bPathfinder");
+        ini.SetBoolValue("Pathfinder", "bEnabled", value.pathfinder.enabled);
+        ini.SetValue("Pathfinder", "sCompanion", value.pathfinder.companion.c_str());
+        ini.SetValue("Pathfinder", "sCompanionName", value.pathfinder.companionName.c_str());
+        ini.SetDoubleValue("Pathfinder", "fRange", value.pathfinder.range);
+        ini.Delete("Pathfinder", "fRunAhead");
+        ini.SetDoubleValue("Pathfinder", "fRunToward", value.pathfinder.run);
+        ini.SetDoubleValue("Pathfinder", "fResume", value.pathfinder.resume);
+        ini.SetBoolValue("Pathfinder", "bLead", value.pathfinder.lead);
+        ini.SetBoolValue("Pathfinder", "bIcon", value.pathfinder.icon);
+        ini.SetDoubleValue("Pathfinder", "fCooldown", value.pathfinder.cooldown);
+        ini.SetBoolValue("Pathfinder", "bWave", value.pathfinder.wave);
+        ini.SetBoolValue("Pathfinder", "bNotice", value.pathfinder.notice);
+        ini.SetBoolValue("Compatibility", "bReplaceNFFCatchup", value.replaceFrameworkCatchup);
         ini.SetBoolValue("Movement", "bForwardCollision", value.forwardCollision);
         ini.SetDoubleValue("Movement", "fTeleportDistance", value.teleportDistance);
         ini.SetBoolValue("Sandbox", "bAutomatic", value.sandbox.automatic);
@@ -369,13 +452,23 @@ namespace Wayfarer
         ini.SetBoolValue("Loot", "bInhabitedInteriors", value.loot.inhabitedInteriors);
         ini.SetValue("Loot", "sFinder", value.loot.finder.c_str());
         ini.SetValue("Loot", "sFinderName", value.loot.finderName.c_str());
+        // Mod Organizer creates the new temporary file in its overwrite folder while the INI stays in
+        // the mod's folder. When those are on different drives the rename must be allowed to copy:
+        // MO2's MoveFileExW hook, unlike its MoveFileW one, does not add MOVEFILE_COPY_ALLOWED itself.
         auto temporary = path;
         temporary += ".tmp";
         if (ini.SaveFile(temporary.string().c_str()) < 0 ||
             !MoveFileExW(temporary.c_str(), path.c_str(),
-                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            logger::error("[Settings] Could not save {}", path.string());
-            return false;
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH)) {
+            const auto replaceError = GetLastError();
+            DeleteFileW(temporary.c_str());
+            if (ini.SaveFile(path.string().c_str()) < 0) {
+                logger::error("[Settings] Could not save {} (Windows error {}, then {})", path.string(),
+                              replaceError, GetLastError());
+                return false;
+            }
+            logger::warn("[Settings] Replacing {} failed (Windows error {}); wrote it in place", path.string(),
+                         replaceError);
         }
         Load();
         return true;

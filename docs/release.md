@@ -1,20 +1,21 @@
-# Walk With Me 0.2.2
+# Walk With Me 0.2.5
 
-Animated conversation/loot icons, compact yellow/ivory settings with background
-artwork, richer rest activities, loot scouting, revised teleport catch-up and
-Classic/TETHER hand-holding choices. See CHANGELOG.md for all changes since the
-public 0.2.0 release. Post-victory reactions are shelved.
+Custom formations, the Pathfinder, a Party actions page, included TETHER clasp
+animations, NFF catch-up takeover, and fixes for GOG startup and settings that
+failed to save under MO2. See CHANGELOG.md for all changes since 0.2.2.
+Post-victory reactions are shelved.
 
 ## Requirements
 
 Windows Skyrim runtimes accepted by this build:
 
 - 1.5.97
-- 1.6.318, 323, 342, 353, 629, 640, 659, 1130, 1170 and 1179
+- 1.6.318, 323, 342, 353, 629, 640, 1130 and 1170 (Steam)
+- 1.6.1179 and 659 (GOG)
 - 1.7.99 and 1.7.104
 
-The 1.6/GOG and 1.7 paths still need in-game testing. VR, Game Pass, Epic and
-other 1.7 patches are not accepted.
+The 1.6/GOG and 1.7 paths still need in-game testing. GOG 1.6.1170 is refused:
+update it to 1.6.1179. VR, Game Pass, Epic and other 1.7 patches are not accepted.
 
 Install matching [SKSE](https://skse.silverlock.org/),
 [Address Library](https://www.nexusmods.com/skyrimspecialedition/mods/32444) and
@@ -29,13 +30,12 @@ The base archive has neither the GPMA patch nor FPI-dependent signal configs.
 FPI first-person clips are not bundled.
 
 The main follower features and Classic hand holding need no behavior generator.
-The optional TETHER method needs Open Animation Replacer and locally generated
-clasp poses. Follow HAND_HOLDING.md; the public package includes the generator and
-codec source. The gesture add-on does not supply these clasp clips.
+The optional TETHER method needs Open Animation Replacer. Its clasp poses are
+included in the main download, not the gesture add-on. See HAND_HOLDING.md.
 
 ## Install
 
-Close Skyrim and install `Walk-With-Me-0.2.2-SE-AE.zip` through your mod manager.
+Close Skyrim and install `Walk-With-Me-0.2.5-SE-AE.zip` through your mod manager.
 Replace the old mod, keep your INI if wanted, and enable `Wayfarer.esp`.
 Do not merge over the old combined download: remove its leftover WWM gesture
 files by replacing the installation. Follow GESTURES.md to install the optional
@@ -53,5 +53,5 @@ The DLL links CommonLibSSE-NG 7.5.1 at
 The code uses GPL-3.0-or-later with the included exceptions. Asset licenses are
 separate. See LICENSE, LICENSING.md and ThirdParty.
 
-The matching `Walk-With-Me-0.2.2-Source.zip` includes mod,
+The matching `Walk-With-Me-0.2.5-Source.zip` includes mod,
 CommonLib and dependency source. Build instructions are in docs/build.md.

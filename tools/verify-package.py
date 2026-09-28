@@ -3,6 +3,7 @@ from pathlib import Path
 import struct
 import sys
 import hashlib
+import json
 
 root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / 'package'
 from animation_package import verify_patch
@@ -175,7 +176,8 @@ assert (root/'Interface/WalkWithMe/teleport.svg').is_file(), 'game teleport artw
 
 import xml.etree.ElementTree as ET
 art=root/'Interface/WalkWithMe'
-expected={'natural','arrow','wing-a','wing-b','shield','logs','flame','ember','wheel-slice','teleport','chat','loot'}
+crests={'crest-'+k for k in ('band','banner','crown','castle','swords','dragon','wolf','raven','stag','steed','pine','rune','watch','moon','calm','tavern')}
+expected={'natural','arrow','wing-a','wing-b','shield','logs','flame','ember','wheel-slice','teleport','chat','loot','pathfinder'}|crests
 assert {p.stem for p in art.glob('*.svg')}==expected
 assert {p.name for p in art.glob('*.png')} == {'menu-background.png'}, 'only the settings background PNG should ship'
 background = (art/'menu-background.png').read_bytes()
@@ -187,7 +189,7 @@ for name in expected:
     assert node.attrib['viewBox']=='0 0 512 512'
     assert len(node.findall('{http://www.w3.org/2000/svg}path'))==(7 if name=='wheel-slice' else 1)
     assert b'clipPath' not in data and b'<animate' not in data, 'native renderer owns cropping and animation'
-assert sum(p.stat().st_size for p in art.glob('*.svg'))<16000
+assert sum(p.stat().st_size for p in art.glob('*.svg'))<48000
 assert (root/'ThirdParty/GameIcons-NOTICE.txt').is_file()
 font=(root/'SKSE/Plugins/Fonts/WalkWithMeInscription.ttf').read_bytes()
 assert font[:4]==b'\x00\x01\x00\x00' and len(font)>10000, 'bundled inscription font'
@@ -203,8 +205,13 @@ assert (root / 'Scripts/Source/WayfarerRecovery.psc').is_file()
 tether = (root / 'Scripts/WayfarerTether.pex').read_bytes()
 assert tether[:4] == b'\xfa\x57\xc0\xde' and b'AddHavokBallAndSocketConstraint' in tether, 'matching tether bridge missing'
 assert b'RequestTetherHandoff' in (root / 'Scripts/WayfarerQuestScript.pex').read_bytes()
+clasp = root / 'meshes/OpenAnimationReplacer/WWM Clasp'
+assert len(list(clasp.rglob('*.hkx'))) == 68, 'all 68 hand-clasp clips must be present'
+for side in ('Left', 'Right'):
+    condition = json.loads((clasp / side / 'config.json').read_text())['conditions'][0]
+    # OAR refuses a condition whose required version is above the plugin's; 0.16.8 once did this.
+    assert condition['requiredVersion'] == '0.2.0.0', f'{side} clasp config must require plugin 0.2.0.0'
 if '--public' in sys.argv:
-    assert not (root / 'meshes/OpenAnimationReplacer/WWM Clasp').exists(), 'generate clasp clips locally, never publish them'
     assert len(list((root / 'Scripts').glob('*.pex'))) == 7, 'expected six active scripts and legacy victory cleanup'
 assert not (root / 'meshes/OpenAnimationReplacer/Walk With Me Victory').exists(), 'shelved victory assets must not ship'
 assert 'bVictoryCelebrations' not in (root / 'SKSE/Plugins/Wayfarer.ini').read_text(), 'shelved setting must not ship'

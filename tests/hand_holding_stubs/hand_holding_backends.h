@@ -53,6 +53,10 @@ namespace Wayfarer::HandHolding
         Approach GetApproach();
         bool IsAttached(RE::FormID);
         void ReleaseActor(RE::FormID);
+        bool OwnsMovement(RE::FormID);
+        std::int32_t HandoffTicket(RE::FormID);
+        bool HandoffCleanupFinished(RE::FormID, std::int32_t);
+        void ConfirmHandoff(RE::FormID, std::int32_t, bool, bool);
     } // namespace Classic
     namespace Tether
     {

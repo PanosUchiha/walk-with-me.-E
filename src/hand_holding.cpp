@@ -6,6 +6,7 @@
 #include "hand_hold_overrides.h"
 #include "hand_hold_pose.h"
 #include "hand_holding_backends.h"
+#include "tether_session.h"
 
 namespace Wayfarer::HandHolding::Classic
 {
@@ -34,6 +35,25 @@ namespace Wayfarer::HandHolding::Classic
         float nativeDirection{}, nativeTurnDelta{};
         float writtenPhysicsSpeed{};
         std::uint32_t visualUpdates{};
+        // Per-trace-interval correction breakdown (attachment frame).
+        float correctionSum{}, correctionPeak{}, alongPeak{}, acrossPeak{}, verticalPeak{};
+        float fadeLow{1};
+        std::uint32_t correctionSamples{};
+        // Native movement. Teleporting the companion every frame fought Skyrim's own
+        // steering, which kept pushing them away from the player. Once the hands connect,
+        // the companion leaves WWM's travel alias through the same ticketed Papyrus handoff
+        // TETHER uses, and KeepOffsetFromActor walks them. The teleport only bridges the
+        // gap until that handoff is acknowledged. Classic tickets are negative so they can
+        // never match a TETHER session.
+        TetherHandoff handoff;
+        TetherSeparation separation;
+        std::int32_t ticket{};
+        RE::ActorHandle offsetActor;
+        RE::TESPackage* offsetPackage{};
+        float offsetX{}, handoffTime{}, offsetRetry{};
+        bool offsetRequested{}, native{};
+        // TETHER's proven follow geometry: slightly behind, catch-up 60, follow radius 10.
+        constexpr float offsetBehind = -10, catchUpRadius = 60, followRadius = 10;
         struct CollisionLease
         {
             RE::NiPointer<RE::bhkCharacterController> controller;
@@ -62,7 +82,8 @@ namespace Wayfarer::HandHolding::Classic
                 current->flags.set(RE::CHARACTER_FLAGS::kNoCharacterCollisions);
                 return true;
             }
-        } collision;
+            // The flag on the companion alone left the player's controller bumping into them.
+        } collision, playerCollision;
         struct GraphSpeedLease
         {
             const char* name{"Speed"};
@@ -158,6 +179,99 @@ namespace Wayfarer::HandHolding::Classic
             return true;
         }
 
+        // Queues a Papyrus Actor method. Asynchronous; `done` runs on the main thread after it.
+        template <class Done, class... Args>
+        bool CallActor(RE::Actor& actor, const char* function, Done done, Args... args)
+        {
+            struct Completion final : RE::BSScript::IStackCallbackFunctor
+            {
+                Done done;
+                explicit Completion(Done value) : done(std::move(value)) {}
+                void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
+                void operator()(RE::BSScript::Variable) override
+                {
+                    if (auto* tasks = SKSE::GetTaskInterface()) {
+                        tasks->AddTask([run = done] { run(); });
+                    }
+                }
+            };
+            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+            auto* policy = vm ? vm->GetObjectHandlePolicy() : nullptr;
+            if (!policy) {
+                return false;
+            }
+            const auto handle = policy->GetHandleForObject(actor.GetFormType(), &actor);
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback{new Completion(std::move(done))};
+            return vm->DispatchMethodCall(handle, RE::BSFixedString("Actor"), RE::BSFixedString(function),
+                                          RE::MakeFunctionArguments(std::move(args)...), callback);
+        }
+        void ClearOffset(RE::Actor& actor)
+        {
+            if (!CallActor(actor, "ClearKeepOffsetFromActor", [] {})) {
+                logger::error("[HandHolding] Could not queue ClearKeepOffsetFromActor for {:08X}",
+                              actor.GetFormID());
+            }
+        }
+        // Gives movement back to WWM. The alias sync also clears the offset when it
+        // reclaims the companion, so a late clear cannot strand them beside the player.
+        void EndNative()
+        {
+            if (offsetRequested) {
+                if (auto actor = offsetActor.get()) {
+                    ClearOffset(*actor);
+                    logger::info("[HandHolding] Native movement ended for {:08X}", actor->GetFormID());
+                }
+            }
+            handoff = {};
+            separation = {};
+            offsetActor = {};
+            offsetPackage = nullptr;
+            offsetRequested = native = false;
+            handoffTime = offsetRetry = 0;
+        }
+        // KeepOffsetFromActor belongs to the running package, so it is requested again
+        // whenever the companion's package changes. Facing follows the player (angles 0).
+        void RequestOffset(RE::PlayerCharacter& player, RE::Actor& partner)
+        {
+            const auto session = ticket;
+            const auto handle = partner.GetHandle();
+            offsetActor = handle;
+            offsetPackage = partner.GetCurrentPackage();
+            offsetRetry = .5F;
+            const bool queued = CallActor(
+                partner, "KeepOffsetFromActor",
+                [session, handle] {
+                    std::lock_guard lock(mutex);
+                    if (session == ticket && offsetRequested && offsetActor == handle &&
+                        state.GetPhase() == Phase::Holding) {
+                        if (!native) {
+                            logger::info("[HandHolding] Native movement active for {:08X}; handoff took {:.2f}s",
+                                         state.Partner(), handoffTime);
+                        }
+                        native = true;
+                        // The engine now drives the body: no teleport, heading or gait overrides.
+                        locomotionActor.store(0, std::memory_order_release);
+                        graphSpeedLease.Restore();
+                        graphDirectionLease.Restore();
+                        graphTurnLease.Restore();
+                    }
+                    else if (!(offsetRequested && offsetActor == handle)) {
+                        // Released while the call was queued; undo it.
+                        if (auto actor = handle.get()) {
+                            ClearOffset(*actor);
+                        }
+                    }
+                },
+                static_cast<RE::Actor*>(&player), offsetX, offsetBehind, 0.0F, 0.0F, 0.0F, 0.0F, catchUpRadius,
+                followRadius);
+            if (queued) {
+                offsetRequested = true;
+            }
+            else {
+                logger::error("[HandHolding] Could not queue KeepOffsetFromActor for {:08X}", partner.GetFormID());
+            }
+        }
+
         bool Attached(RE::NiAVObject* node, RE::NiAVObject* root)
         {
             for (int i = 0; node && i < 64; ++i, node = node->parent) {
@@ -205,6 +319,8 @@ namespace Wayfarer::HandHolding::Classic
             RE::NiPointer<RE::NiAVObject> root;
             RE::NiPointer<RE::NiNode> boneTree;
             Bone upper, lower, hand;
+            // Optional: spread the wrist's roll along the forearm instead of wringing the wrist.
+            Bone twist1, twist2;
             std::array<Bone, 12> fingers;
             bool left{};
             RE::ActorHandle actor;
@@ -226,6 +342,8 @@ namespace Wayfarer::HandHolding::Classic
                 restore(upper);
                 restore(lower);
                 restore(hand);
+                restore(twist1);
+                restore(twist2);
                 for (auto& bone : fingers) {
                     restore(bone);
                 }
@@ -261,6 +379,15 @@ namespace Wayfarer::HandHolding::Classic
                     *this = {};
                     return false;
                 }
+                for (int index : {1, 2}) {
+                    const auto name = fmt::format("NPC {} ForearmTwist{} [{}Lt{}]", useLeft ? "L" : "R", index,
+                                                  useLeft ? "L" : "R", index);
+                    auto& twist = index == 1 ? twist1 : twist2;
+                    twist.node.reset(current->GetObjectByName(name.c_str()));
+                    if (twist.node && !Attached(twist.node.get(), lower.node.get())) {
+                        twist.node.reset();
+                    }
+                }
                 for (int finger = 1; finger <= 4; ++finger) {
                     for (int joint = 0; joint < 3; ++joint) {
                         const auto name = fmt::format("NPC {} Finger{}{} [{}F{}{}]", useLeft ? "L" : "R",
@@ -284,7 +411,9 @@ namespace Wayfarer::HandHolding::Classic
 
         void ClearPose()
         {
+            EndNative();
             collision.Restore();
+            playerCollision.Restore();
             graphSpeedLease.Restore();
             graphDirectionLease.Restore();
             graphTurnLease.Restore();
@@ -298,6 +427,9 @@ namespace Wayfarer::HandHolding::Classic
             attachedActor.store(0, std::memory_order_release);
             attachment.Reset();
             reachFailureTime = traceTime = 0;
+            correctionSum = correctionPeak = alongPeak = acrossPeak = verticalPeak = 0;
+            correctionSamples = 0;
+            fadeLow = 1;
             rendering.store(false, std::memory_order_release);
             renderPartner.store(0, std::memory_order_release);
             auto p = playerArm.actor.get();
@@ -340,7 +472,9 @@ namespace Wayfarer::HandHolding::Classic
             if (state.GetPhase() == Phase::Holding) {
                 logger::info("[HandHolding] Released {:08X}: {}", state.Partner(), reason);
             }
+            EndNative();
             collision.Restore();
+            playerCollision.Restore();
             graphSpeedLease.Restore();
             graphDirectionLease.Restore();
             graphTurnLease.Restore();
@@ -480,11 +614,13 @@ namespace Wayfarer::HandHolding::Classic
             bone.Finish();
             World(bone.node.get());
         }
+        IK::ClaspHand ClaspFor(bool player)
+        {
+            return IK::InterlockedHand(P(grip), P(forward), P(right), approach.side, player);
+        }
         RE::NiPoint3 WristTarget(bool player)
         {
-
-            const float side = static_cast<float>(approach.side) * (player ? -1.0F : 1.0F);
-            return grip + right * (side * 2.0F);
+            return N(ClaspFor(player).wrist);
         }
         bool Reachable(const Arm& arm, RE::NiPoint3 target)
         {
@@ -529,21 +665,38 @@ namespace Wayfarer::HandHolding::Classic
                 const auto along =
                     (index->world.translate + pinky->world.translate) * .5F - arm.hand.node->world.translate;
                 const auto across = index->world.translate - pinky->world.translate;
-                const auto desiredNormal =
-                    right * (static_cast<float>(approach.side) * (player ? 1.0F : -1.0F));
-                const auto alignment = IK::WristAlignment(P(along), P(across), arm.left, P(desiredNormal));
+                const auto clasp = ClaspFor(player);
+                const auto alignment =
+                    IK::WristAlignment(P(along), P(across), arm.left, clasp.palm, clasp.along);
                 if (!alignment) {
                     return;
                 }
                 const auto desired = Native(*alignment) * arm.hand.node->world.rotate;
+                // Turning the palm to face front or back rolls the hand about the forearm.
+                // Carry a third of that roll on each twist bone so the wrist skin follows.
+                const auto forearm = arm.hand.node->world.translate - arm.lower.node->world.translate;
+                const float roll =
+                    IK::TwistAbout(P(forearm), P(across), IK::Transform(*alignment, P(across))) * weight;
+                // XPMSSE parents both twist bones to the forearm; a chained pair already
+                // inherits the first bone's share.
+                const bool chained = arm.twist1.node && arm.twist2.node &&
+                                     Attached(arm.twist2.node.get(), arm.twist1.node.get());
+                for (auto* twist : {&arm.twist1, &arm.twist2}) {
+                    if (twist->node && std::isfinite(roll) && Attached(twist->node.get(), arm.lower.node.get())) {
+                        const float share = twist == &arm.twist1 || chained ? 1.0F / 3 : 2.0F / 3;
+                        RotateWorld(*twist,
+                                    Native(IK::Rotation(roll * share, P(forearm))) * twist->node->world.rotate);
+                    }
+                }
                 RotateWorld(arm.hand, Blend(arm.hand.node->world.rotate, desired, weight));
 
+                // Curl toward the palm, around the far edge of the other hand.
+                const auto curlAxis = Unit(N(IK::Cross(clasp.along, clasp.palm)), forward);
+                const auto curl = Native(IK::Rotation(.5F * weight, P(curlAxis)));
                 for (auto& bone : arm.fingers) {
                     if (!bone.node || !Attached(bone.node.get(), arm.hand.node.get())) {
                         continue;
                     }
-                    const auto curlAxis = Unit(RE::NiPoint3{0, 0, -1}.Cross(desiredNormal), forward);
-                    const auto curl = Native(IK::Rotation(.38F * weight, P(curlAxis)));
                     RotateWorld(bone, curl * bone.node->world.rotate);
                 }
             }
@@ -856,6 +1009,10 @@ namespace Wayfarer::HandHolding::Classic
         BonePassHook<0x2E, false>::Install();
         logger::info("[HandHolding] Revision 11.2: revision 11 pose and attachment; scene-only refresh "
                      "preserves controller velocity");
+        logger::info("[HandHolding] Classic comfort r4: pair collision off on both actors, configurable "
+                     "spacing/side");
+        logger::info("[HandHolding] Classic native r5: KeepOffsetFromActor movement after the alias handoff; "
+                     "interlocked clasp with forearm twist");
     }
     void Reset()
     {
@@ -883,7 +1040,13 @@ namespace Wayfarer::HandHolding::Classic
         std::lock_guard lock(mutex);
         const bool changed =
             value.partner != tuning.partner || value.enabled != tuning.enabled || value.delay != tuning.delay;
+        const bool geometry = value.spacing != tuning.spacing || value.side != tuning.side;
         tuning = value;
+        if (geometry && !changed && state.GetPhase() != Phase::Waiting) {
+            // The captured attachment keeps the old spacing; approach and connect again.
+            Drop("hand spacing or side changed", true);
+            approach = {};
+        }
         if (changed || !permitted || !value.enabled || value.partner.empty()) {
             ClearPose();
             approach = {};
@@ -958,11 +1121,44 @@ namespace Wayfarer::HandHolding::Classic
             return;
         }
         float correction{};
-        if (holding) {
+        if (holding && native) {
+            // The engine walks the companion; only watch the pair and keep the offset alive.
+            collision.Acquire(*partner);
+            playerCollision.Acquire(player);
+            if (separation.Release((partner->GetPosition() - pos).Length(), tuning.releaseDistance, dt)) {
+                Drop("separated beyond release distance");
+                return;
+            }
+            const auto f = ForwardFromYaw(player.GetAngleZ());
+            forward = {f.x, f.y, 0};
+            right = {f.y, -f.x, 0};
+            approach.heading = player.GetAngleZ();
+            approach.velocity = playerVelocity;
+            offsetRetry = std::max(0.0F, offsetRetry - dt);
+            if (partner->GetCurrentPackage() != offsetPackage && offsetRetry <= 0) {
+                logger::info("[HandHolding] Package changed for {:08X}; requesting offset again",
+                             partner->GetFormID());
+                RequestOffset(player, *partner);
+            }
+        }
+        else if (holding) {
+            // Bridge until WWM's alias releases the companion: the sticky attachment below.
+            handoffTime += dt;
+            offsetRetry = std::max(0.0F, offsetRetry - dt);
+            if (!handoff.ready && handoffTime > 8 && handoffTime - dt <= 8) {
+                logger::warn("[HandHolding] Alias handoff for {:08X} not acknowledged after 8s; staying on the "
+                             "attachment",
+                             partner->GetFormID());
+            }
+            if (handoff.ready && !offsetRequested && offsetRetry <= 0) {
+                offsetX = static_cast<float>(approach.side) * approach.spacing;
+                RequestOffset(player, *partner);
+            }
             if (!collision.Acquire(*partner)) {
                 Drop("character controller unavailable", true);
                 return;
             }
+            playerCollision.Acquire(player);
             if ((partner->GetPosition() - pos).Length() > tuning.releaseDistance) {
                 Drop("separated beyond release distance");
                 return;
@@ -987,7 +1183,19 @@ namespace Wayfarer::HandHolding::Classic
                 Drop("attachment left reachable ground");
                 return;
             }
-            correction = (*grounded - from).Length();
+            const auto error = *grounded - from;
+            correction = error.Length();
+            correctionSum += correction;
+            ++correctionSamples;
+            correctionPeak = std::max(correctionPeak, correction);
+            alongPeak = std::max(alongPeak, std::abs(error.x * forward.x + error.y * forward.y));
+            acrossPeak = std::max(acrossPeak, std::abs(error.x * right.x + error.y * right.y));
+            verticalPeak = std::max(verticalPeak, std::abs(error.z));
+            if (auto* root = partner->Get3D(false)) {
+                if (auto* fade = root->AsFadeNode()) {
+                    fadeLow = std::min(fadeLow, fade->GetRuntimeData().currentFade);
+                }
+            }
             if (correction > 96) {
                 Drop("attachment correction too large");
                 return;
@@ -1014,16 +1222,16 @@ namespace Wayfarer::HandHolding::Classic
             seekGait.Reset();
             haveSeekPosition = false;
             seekUpdates = 0;
-            approach = {partner->GetFormID(), (partner->GetPosition() - pos).Dot(right) < 0 ? -1 : 1,
-                        SeekSpacing(tuning.connectDistance)};
+            approach = {partner->GetFormID(), ClassicSide(tuning.side, (partner->GetPosition() - pos).Dot(right)),
+                        ClassicSpacing(tuning.spacing)};
             seekTraceTime = 2;
-            logger::info("[HandHolding] Seeking {} ({:08X}); side={} handSpacing={:.1f}; independent of "
-                         "formation spacing",
-                         partner->GetName(), partner->GetFormID(), approach.side, approach.spacing);
+            logger::info("[HandHolding] Seeking {} ({:08X}); side={} (setting {}) handSpacing={:.1f}; "
+                         "independent of formation spacing",
+                         partner->GetName(), partner->GetFormID(), approach.side, tuning.side, approach.spacing);
         }
         bool idleContact = false;
         if (state.Searching()) {
-            approach.spacing = SeekSpacing(tuning.connectDistance);
+            approach.spacing = ClassicSpacing(tuning.spacing);
             const auto target = SeekPoint(P(pos), player.GetAngleZ(), approach.side, approach.spacing);
             const auto from = partner->GetPosition();
             RE::NiPoint3 nativeVelocity{};
@@ -1056,6 +1264,7 @@ namespace Wayfarer::HandHolding::Classic
                     if (!seekStatus) {
                         collisionNeeded = collision.Acquire(*partner);
                         if (collisionNeeded) {
+                            playerCollision.Acquire(player);
                             locomotionActor.store(partner->GetFormID(), std::memory_order_release);
                             DriveLocomotion(*partner);
                         }
@@ -1074,6 +1283,7 @@ namespace Wayfarer::HandHolding::Classic
             }
             if (!corrected) {
                 collision.Restore();
+                playerCollision.Restore();
                 graphSpeedLease.Restore();
                 graphDirectionLease.Restore();
                 graphTurnLease.Restore();
@@ -1159,13 +1369,18 @@ namespace Wayfarer::HandHolding::Classic
                 approach.heading = attachment.Yaw();
                 renderPartner.store(partner->GetFormID(), std::memory_order_release);
                 rendering.store(true, std::memory_order_release);
+                ticket = ticket <= -0x3fffffff ? -1 : ticket - 1;
+                handoff.Start(partner->GetFormID(), ticket);
+                separation = {};
+                handoffTime = offsetRetry = 0;
                 logger::info("[HandHolding] Attached to {} ({:08X}); side={} gap={:.1f}; walk/run enabled, "
-                             "sprint releases",
-                             partner->GetName(), partner->GetFormID(), approach.side, distance);
+                             "sprint releases; alias handoff {} requested for native movement",
+                             partner->GetName(), partner->GetFormID(), approach.side, distance, ticket);
             }
         }
         else {
-            if (reachFailureTime > .25F || poseFailed) {
+            // Native movement catches up a step behind on starts; let the arms stretch meanwhile.
+            if (reachFailureTime > (native ? 1.5F : .25F) || poseFailed) {
                 logger::info("[HandHolding] Reach: player={:.1f}/{:.1f} partner={:.1f}/{:.1f} shared={}",
                              (WristTarget(true) - playerArm.upper.node->world.translate).Length(),
                              playerArm.Upper() + playerArm.Lower(),
@@ -1174,7 +1389,9 @@ namespace Wayfarer::HandHolding::Classic
                 Drop(poseFailed ? "arm pose interrupted" : "arms out of reach");
                 return;
             }
-            if (!state.Maintain(partner->GetFormID(), distance, true, tuning)) {
+            // Under native movement the separation grace above already decided.
+            if (!state.Maintain(partner->GetFormID(), native ? std::min(distance, tuning.releaseDistance) : distance,
+                                true, tuning)) {
                 Drop("separation");
                 return;
             }
@@ -1210,7 +1427,10 @@ namespace Wayfarer::HandHolding::Classic
                     "desiredSpeed={:.1f} graphSpeed={:.1f} graphDriven={} characterCollisionOff={} "
                     "posePasses={}/{} npcUpdates={} headingError={:.3f} graphDirection={:.2f} "
                     "graphTurn={:.2f} postChannelPasses={} nativeDirection={:.3f} nativeTurn={:.2f} "
-                    "writtenPhysicsSpeed={:.1f} visualUpdates={}",
+                    "writtenPhysicsSpeed={:.1f} visualUpdates={} spacing={:.1f} meanCorrection={:.2f} "
+                    "peakCorrection={:.2f} peakAlong={:.2f} peakAcross={:.2f} peakVertical={:.2f} "
+                    "playerCollisionOff={} fadeLow={:.2f} native={} handoffReady={} lateral={:.1f} along={:.1f} "
+                    "package={:08X}",
                     partner->GetFormID(), std::hypot(velocity.x, velocity.y), distance, correction,
                     (playerArm.hand.node->world.translate - followerArm.hand.node->world.translate).Length(),
                     state.Weight(), std::hypot(followerVelocity.x, followerVelocity.y),
@@ -1221,9 +1441,18 @@ namespace Wayfarer::HandHolding::Classic
                     playerPosePasses, partnerPosePasses, partnerUpdatePasses,
                     std::remainder(partner->GetAngleZ() - attachment.Yaw(), 6.283185307F), graphDirection,
                     graphTurn, channelPasses, nativeDirection, nativeTurnDelta, writtenPhysicsSpeed,
-                    visualUpdates);
+                    visualUpdates, approach.spacing,
+                    correctionSamples ? correctionSum / static_cast<float>(correctionSamples) : 0.0F,
+                    correctionPeak, alongPeak, acrossPeak, verticalPeak,
+                    playerCollision.controller &&
+                        playerCollision.controller->flags.any(RE::CHARACTER_FLAGS::kNoCharacterCollisions),
+                    fadeLow, native, handoff.ready, delta.Dot(right), delta.Dot(forward),
+                    partner->GetCurrentPackage() ? partner->GetCurrentPackage()->GetFormID() : 0);
                 playerPosePasses = partnerPosePasses = partnerUpdatePasses = channelPasses = visualUpdates =
                     0;
+                correctionSum = correctionPeak = alongPeak = acrossPeak = verticalPeak = 0;
+                correctionSamples = 0;
+                fadeLow = 1;
             }
         }
     }
@@ -1235,5 +1464,30 @@ namespace Wayfarer::HandHolding::Classic
     bool IsAttached(RE::FormID actor)
     {
         return actor && attachedActor.load(std::memory_order_acquire) == actor;
+    }
+    // Same ticketed alias handoff as TETHER; see TetherHandoff.
+    bool OwnsMovement(RE::FormID actor)
+    {
+        std::lock_guard lock(mutex);
+        return actor && handoff.actor == actor;
+    }
+    std::int32_t HandoffTicket(RE::FormID actor)
+    {
+        std::lock_guard lock(mutex);
+        return actor && handoff.actor == actor ? handoff.ticket : 0;
+    }
+    bool HandoffCleanupFinished(RE::FormID actor, std::int32_t value)
+    {
+        std::lock_guard lock(mutex);
+        return actor && handoff.actor == actor && handoff.ticket == value && handoff.cleanupComplete &&
+               !handoff.ready;
+    }
+    void ConfirmHandoff(RE::FormID actor, std::int32_t value, bool aliasEmpty, bool packageReleased)
+    {
+        std::lock_guard lock(mutex);
+        handoff.RecordCleanup(actor, value, aliasEmpty);
+        if (!handoff.ready && handoff.Confirm(actor, value, aliasEmpty, packageReleased)) {
+            logger::info("[HandHolding] Alias handoff {} acknowledged after {:.2f}s", value, handoffTime);
+        }
     }
 } // namespace Wayfarer::HandHolding::Classic

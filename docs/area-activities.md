@@ -67,7 +67,26 @@ Two cases are handled differently:
   shackles, mining and hammer markers, walk-through-wall markers, the Molag Bal
   altar, execution blocks, cart and ladder markers, and similar.
 
-## What each place adds
+## Fitting the place (2026-09-25)
+
+Report: companions kept eating bread in the middle of town. Two things did it:
+Skyrim's own sandbox eats whatever food a companion carries (the sandbox package's
+Allow Eating input), and it was allowed everywhere but dungeons; and the refreshment
+table counted a town's streets as a "settled" place, weighting food 4 to 1 there.
+
+Now, in `include/area_activities.h`:
+
+- **Meals** (`MealPlace`, `NativeMeals`) happen only at an inn, in a home, the
+  player's home or a hall, or at a campfire in the wilds. Never in a town's streets,
+  a temple, a shop or a dungeon. Scripted standing food and drink are narrower still:
+  the inn and the player's own home. Other homes and halls eat at their tables
+  through the native sandbox.
+- **Reading** is not offered in the street, a shop, a cave or a ruin. **Stretching**
+  is not offered in a temple or a shop, and a temple drops the generic examine.
+- **Temporary rest is a short stop** (`settled` false). It keeps to brief standing
+  poses: no eating (except a drink at the inn), reading, ground sitting, studying or
+  sweeping, and at a campfire they crouch rather than sit. A Relax order settles in,
+  and a Relax camp in the wilds may eat by its fire.
 
 These poses are chosen when nothing in particular is being walked to:
 
@@ -76,11 +95,13 @@ These poses are chosen when nothing in particular is being walked to:
 | Wilderness | Look into the distance; rub arms when cold; clean a one-handed sword |
 | Town | Hands behind the back; look around; rub arms when cold |
 | Home | Study; hands behind the back |
-| Player home | Sweep (the broom comes from the animation); study |
+| Player home | Sweep (the broom comes from the animation); study; food, drink and reading with Extra rest poses |
 | Temple | Pray; study; hands behind the back |
 | Shop | Examine the wares; study |
 | Hall | Hands behind the back; study |
 | Inn | Drinks and food; hands behind the back |
+
+On a short stop, study and sweep are left out, and only the inn offers a drink.
 | Cave | Examine; nervous glances; wipe brow; look into the dark; clean a sword |
 | Ruin | Examine; study carvings; nervous glances; look ahead; clean a sword |
 

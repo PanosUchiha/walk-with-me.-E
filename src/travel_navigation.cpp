@@ -183,8 +183,11 @@ namespace Wayfarer
         return {};
     }
 
-    void TravelNavigation::Collect(RE::PlayerCharacter& a_player)
+    void TravelNavigation::Collect(RE::PlayerCharacter& a_player, float reach)
     {
+        // Sampling the corners and edges of the square finds every cell in it while it is no
+        // wider than two cells.
+        reach = std::clamp(reach, 0.0F, 4096.0F);
         meshes.clear();
         std::unordered_set<RE::TESObjectCELL*> seen;
         auto add = [&](RE::TESObjectCELL* cell) {
@@ -202,8 +205,8 @@ namespace Wayfarer
         if (a_player.GetParentCell() && !a_player.GetParentCell()->IsInteriorCell()) {
             if (auto* tes = RE::TES::GetSingleton()) {
                 const auto p = a_player.GetPosition();
-                for (float x : {-1200.0F, 0.0F, 1200.0F}) {
-                    for (float y : {-1200.0F, 0.0F, 1200.0F}) {
+                for (float x : {-reach, 0.0F, reach}) {
+                    for (float y : {-reach, 0.0F, reach}) {
                         add(tes->GetCell({p.x + x, p.y + y, p.z}));
                     }
                 }

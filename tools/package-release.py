@@ -1,4 +1,8 @@
-"""Package the public SE/AE mod and matching complete source; no local game assets."""
+"""Package the public SE/AE mod and matching complete source.
+
+The base archive includes the 68 hand-clasp clips from package/meshes/OpenAnimationReplacer/WWM Clasp,
+which tools/build-tether-clasp-clips.py derives from vanilla locomotion; see docs/build.md.
+"""
 from pathlib import Path
 import argparse
 import hashlib
@@ -124,14 +128,6 @@ def main():
         files['docs/' + name] = root / 'docs' / name
     files['rest-dialogue.md'] = root / 'docs/rest-dialogue.md'
 
-    files['ClaspGenerator/build-tether-clasp-clips.py'] = root / 'tools/build-tether-clasp-clips.py'
-    files['ClaspGenerator/clasp-rotations.json'] = root / 'assets/clasp-rotations.json'
-    files['ClaspGenerator/README.md'] = root / 'docs/hand-holding.md'
-    for name in ('anim_skyrim.py', 'anim_fo4.py'):
-        files['ClaspGenerator/codec/' + name] = root / 'third_party/PyNifly/hkx' / name
-    for name in ('LICENSE', 'NOTICE.md'):
-        files['ClaspGenerator/' + name] = root / 'third_party/PyNifly' / name
-
     dependency = root / 'build/deps/CommonLibSSE-NG-7.5.1'
     revision = subprocess.check_output(['git', '-C', str(dependency), 'rev-parse', 'HEAD']).decode().strip()
     assert revision == 'bedcb1e05418baba7b316a650b6180c2dd6007a8'
@@ -146,12 +142,16 @@ def main():
     files['ThirdParty/NOTICE.txt'] = payload(files['ThirdParty/NOTICE.txt']).replace(
         b'include/SKSEMenuFramework.h', b'ThirdParty/SKSEMenuFramework.h')
 
-    # Only individually reviewed, original WWM clips may leave this workspace.
+    # Only individually reviewed clips may leave this workspace: original WWM clips and the
+    # generator-validated clasp clips. Any other animation, or a changed clip, stops packaging.
     approved = json.loads((root / 'assets/release-animation-hashes.json').read_text())
     animations = {name: hashlib.sha256(payload(value)).hexdigest()
                   for name, value in files.items() if name.lower().endswith('.hkx')}
-    assert animations == approved, 'Unreviewed or game-derived animation in public package'
-    assert not any('WWM Clasp/' in name or '_1stPerson' in name for name in files)
+    assert animations == approved, 'Unreviewed animation in public package'
+    assert not any('_1stPerson' in name for name in files)
+    clasp = [name for name in files if name.startswith('meshes/OpenAnimationReplacer/WWM Clasp/')]
+    assert sum(name.endswith('.hkx') for name in clasp) == 68, 'All 68 clasp clips must ship'
+    assert sum(name.endswith('/config.json') for name in clasp) == 2, 'Both clasp OAR configs must ship'
     for name in files:
         if name.endswith('config.json') and 'meshes/OpenAnimationReplacer/' in name:
             config = json.loads(payload(files[name]))
@@ -162,11 +162,15 @@ def main():
                     assert condition['requiredVersion'] == '0.2.0.0', name
     source = {}
     extensions = {'.c', '.cpp', '.h', '.py', '.ps1', '.md', '.txt', '.json', '.toml', '.cmake', '.in', '.svg', '.png', '.ini', '.psc'}
-    for folder in ('src', 'include', 'tests', 'tools', 'docs', 'cmake', 'LICENSES', 'third_party', 'assets'):
+    folders = ('src', 'include', 'tests', 'tools', 'docs', 'cmake', 'LICENSES', 'third_party', 'assets')
+    # Git-ignored files are local notes and downloads, never source.
+    ignored = set(subprocess.check_output(['git', '-C', str(root), 'ls-files', '--others', '--ignored',
+                                           '--exclude-standard', '--', *folders], text=True).splitlines())
+    for folder in folders:
         for path in (root / folder).rglob('*'):
             if path.is_file() and '__pycache__' not in path.parts and (path.suffix in extensions or path.name in {'LICENSE', 'COPYING', 'EXCEPTIONS'}):
                 relative = path.relative_to(root).as_posix()
-                if relative.startswith(('tools/champollion/', 'tools/caprica/')):
+                if relative in ignored or relative.startswith(('tools/champollion/', 'tools/caprica/')):
                     continue
                 source['WalkWithMe/' + relative] = path
     for name in ('.clang-format', '.gitignore', '.gitattributes', 'CMakeLists.txt', 'CMakePresets.json',
@@ -190,7 +194,7 @@ def main():
             source['DependencyProvenance/' + path.relative_to(provenance).as_posix()] = path
     source['DependencyProvenance/vcpkg-status.txt'] = root / 'build/deps/vcpkg-7.5.1/vcpkg/status'
     source['build.md'] = root / 'docs/build.md'
-    assert all(not name.startswith(('WalkWithMe/build/', 'WalkWithMe/experiments/')) and 'WWM Clasp/' not in name for name in source)
+    assert all(not name.startswith(('WalkWithMe/build/', 'WalkWithMe/experiments/')) for name in source)
     assert {name.removeprefix('WalkWithMe/package/') for name in source if name.lower().endswith('.hkx')} == set(approved)
     for mapping in (files, source):
         for value in mapping.values():

@@ -17,10 +17,10 @@ namespace Wayfarer
         }
         // A newly introduced default must not steal an existing custom binding.
         if (!ini.GetValue("Hotkeys", "iCompanionKey")) {
-            const auto companion = hotkeyBindings.back().Get(settings);
-            for (std::size_t i = 0; i + 1 < hotkeyBindings.size(); ++i) {
-                if (hotkeyBindings[i].Get(settings) == companion) {
-                    hotkeyBindings.back().Set(settings, {});
+            const auto companion = hotkeyBindings[companionHotkeyRow].Get(settings);
+            for (std::size_t i = 0; i < hotkeyBindings.size(); ++i) {
+                if (i != companionHotkeyRow && hotkeyBindings[i].Get(settings) == companion) {
+                    hotkeyBindings[companionHotkeyRow].Set(settings, {});
                     break;
                 }
             }

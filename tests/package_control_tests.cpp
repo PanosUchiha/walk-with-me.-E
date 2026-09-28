@@ -161,5 +161,14 @@ int main()
     }
     check(FollowerDialogueRank(false, false, true, false, false, true) == 1,
           "Imported package ownership must suppress a duplicate dialogue Add");
+    // A lost signal pauses an import after a grace period; it never ends it.
+    constexpr std::uint64_t t0 = 100000;
+    const auto flicker = PackageControlLossStart(t0, true);
+    check(!PackageControlPaused(flicker, t0 + 1000) && !PackageControlPaused(flicker, t0 + 4999),
+          "A framework briefly clearing a slot or teammate flag does not drop the companion");
+    check(PackageControlPaused(flicker, t0 + 5000), "A lasting dismissal pauses control");
+    check(PackageControlPaused(PackageControlLossStart(t0, false), t0),
+          "An import never seen following since the load is paused at once");
+    check(!PackageControlPaused(t0 + 10, t0), "A clock that has not reached the loss never pauses");
     return failures ? 1 : 0;
 }

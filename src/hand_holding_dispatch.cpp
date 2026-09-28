@@ -89,23 +89,31 @@ namespace Wayfarer::HandHolding
         Tether::ReleaseActor(actor);
     }
 
-    // Classic retains the native travel package, as in the original implementation.
-    // TETHER owns these endpoints even while a method change is waiting for cleanup.
+    // Both backends use the same ticketed alias handoff; Classic's tickets are negative
+    // and TETHER's positive, so each backend only ever accepts its own. TETHER keeps
+    // these endpoints even while a method change is waiting for its cleanup.
     bool OwnsMovement(RE::FormID actor)
     {
-        return Tether::OwnsMovement(actor);
+        return Tether::OwnsMovement(actor) || Classic::OwnsMovement(actor);
     }
     std::int32_t HandoffTicket(RE::FormID actor)
     {
-        return Tether::HandoffTicket(actor);
+        const auto ticket = Tether::HandoffTicket(actor);
+        return ticket ? ticket : Classic::HandoffTicket(actor);
     }
     bool HandoffCleanupFinished(RE::FormID actor, std::int32_t ticket)
     {
-        return Tether::HandoffCleanupFinished(actor, ticket);
+        return ticket > 0 ? Tether::HandoffCleanupFinished(actor, ticket)
+                          : Classic::HandoffCleanupFinished(actor, ticket);
     }
     void ConfirmHandoff(RE::FormID actor, std::int32_t ticket, bool aliasEmpty, bool packageReleased)
     {
-        Tether::ConfirmHandoff(actor, ticket, aliasEmpty, packageReleased);
+        if (ticket > 0) {
+            Tether::ConfirmHandoff(actor, ticket, aliasEmpty, packageReleased);
+        }
+        else {
+            Classic::ConfirmHandoff(actor, ticket, aliasEmpty, packageReleased);
+        }
     }
     std::int32_t TetherStepStatus(std::int32_t ticket, std::int32_t operation, RE::Actor* player,
                                   RE::Actor* follower)

@@ -8,7 +8,7 @@ using namespace Wayfarer::HandHolding;
 namespace
 {
     std::vector<std::string_view> calls;
-    bool pending{};
+    bool pending{}, classicOwned{};
     void Check(bool ok)
     {
         if (!ok) {
@@ -40,6 +40,22 @@ namespace Wayfarer::HandHolding::Classic
         return actor == 1;
     }
     void ReleaseActor(RE::FormID) {}
+    bool OwnsMovement(RE::FormID actor)
+    {
+        return classicOwned && actor == 1;
+    }
+    std::int32_t HandoffTicket(RE::FormID actor)
+    {
+        return classicOwned && actor == 1 ? -3 : 0;
+    }
+    bool HandoffCleanupFinished(RE::FormID, std::int32_t ticket)
+    {
+        return ticket == -3;
+    }
+    void ConfirmHandoff(RE::FormID, std::int32_t, bool, bool)
+    {
+        calls.push_back("classic confirm");
+    }
 } // namespace Wayfarer::HandHolding::Classic
 namespace Wayfarer::HandHolding::Tether
 {
@@ -83,15 +99,18 @@ namespace Wayfarer::HandHolding::Tether
     {
         return pending && actor == 2;
     }
-    std::int32_t HandoffTicket(RE::FormID)
+    std::int32_t HandoffTicket(RE::FormID actor)
     {
-        return 7;
+        return actor == 2 ? 7 : 0;
     }
     bool HandoffCleanupFinished(RE::FormID, std::int32_t)
     {
         return !pending;
     }
-    void ConfirmHandoff(RE::FormID, std::int32_t, bool, bool) {}
+    void ConfirmHandoff(RE::FormID, std::int32_t, bool, bool)
+    {
+        calls.push_back("tether confirm");
+    }
     std::int32_t TetherStepStatus(std::int32_t ticket, std::int32_t, RE::Actor*, RE::Actor*)
     {
         return ticket;
@@ -152,5 +171,18 @@ int main()
     calls.clear();
     Reset();
     Check(calls == std::vector<std::string_view>{"classic reset", "tether reset"});
+
+    // Classic joins the same alias handoff with negative tickets; each backend
+    // receives only its own acknowledgements.
+    Check(!OwnsMovement(1) && HandoffTicket(1) == 0);
+    classicOwned = true;
+    Check(OwnsMovement(1) && HandoffTicket(1) == -3 && HandoffCleanupFinished(1, -3));
+    Check(HandoffTicket(2) == 7);
+    calls.clear();
+    ConfirmHandoff(1, -3, true, true);
+    ConfirmHandoff(2, 7, true, true);
+    Check(calls == std::vector<std::string_view>{"classic confirm", "tether confirm"});
+    classicOwned = false;
+    Check(!OwnsMovement(1));
     std::cout << "Hand-holding method transitions passed\n";
 }

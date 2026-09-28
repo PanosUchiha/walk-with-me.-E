@@ -54,6 +54,21 @@ namespace Wayfarer::Engine
 #endif
     }
 
+    // The current worldspace's map markers, as the map and compass see them. Legacy CommonLib
+    // compiles this block empty in its multi-runtime build, so SE 1.5.97 reads it at its offset.
+    inline const RE::BSTArray<RE::ObjectRefHandle>* CurrentMapMarkers(RE::PlayerCharacter& player)
+    {
+#ifdef WAYFARER_MODERN_COMMONLIB
+        return &player.GetPlayerRuntimeData().currentMapMarkers;
+#else
+        if (REL::Module::get().version() != REL::Version(1, 5, 97, 0)) {
+            return nullptr;
+        }
+        return reinterpret_cast<const RE::BSTArray<RE::ObjectRefHandle>*>(reinterpret_cast<std::uintptr_t>(&player) +
+                                                                          0x4F8);
+#endif
+    }
+
     inline void SetHeading(RE::Actor& actor, float angle)
     {
 #ifdef WAYFARER_MODERN_COMMONLIB
@@ -75,8 +90,8 @@ namespace Wayfarer::Engine
 #endif
     }
 
-    // Acquisition only: set the reference orientation, rather than asking the
-    // actor's movement controller to turn toward a heading. Preserve pitch/roll.
+    // Set reference orientation rather than asking the actor's movement
+    // controller to turn toward a heading. Callers bound held turns; preserve pitch/roll.
     inline void SetFacingImmediate(RE::Actor& actor, float yaw)
     {
         auto angle = actor.GetAngle();

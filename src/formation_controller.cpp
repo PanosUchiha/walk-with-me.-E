@@ -30,7 +30,65 @@ namespace
 {
     constexpr RE::FormID CURRENT_FOLLOWER_FACTION = 0x0005C84E;
 
+    // Nether's Follower Framework records, read out of nwsFollowerFramework.esp (2.8.6).
+    constexpr std::string_view NFF_PLUGIN = "nwsFollowerFramework.esp";
+    constexpr RE::FormID NFF_WARP_ENABLED = 0x01BDFF;  // nwsAllowWarp: its Catch Up toggle.
+    constexpr RE::FormID NFF_WARP_INTERVAL = 0x068AE2; // nwsWarpStart: seconds between checks.
+    constexpr RE::FormID NFF_SANDBOX_QUEST = 0x179283; // nwsFollowerSandbox, runs the warp timer.
+    constexpr RE::FormID NFF_SANDBOX_RANGE = 0x05C4C6; // nwsSandboxRange.
+    constexpr RE::FormID NFF_SANDBOX_PACKAGE = 0x019664; // nwsFollowerBoxPackPKG.
+    constexpr RE::FormID NFF_LOOT_PACKAGES[]{0x415AD9, 0x41F941}; // nwsFollowerLoot{Ext,Int}PKG.
+
     constexpr RE::FormID WAYFARER_QUEST_LOCAL_ID = 0x805;
+
+    // A script's own variable (not a property), searched from the most derived class up; the
+    // object's variable array holds the base classes' variables first.
+    RE::BSScript::Variable* ScriptVariable(RE::BSScript::Object& object, const RE::BSFixedString& name)
+    {
+        constexpr auto missing = static_cast<std::uint32_t>(-1);
+        std::uint32_t index = missing, offset = 0;
+        for (auto* type = object.type.get(); type; type = type->GetParent()) {
+            if (index != missing) {
+                offset += type->GetNumVariables();
+                continue;
+            }
+            if (const auto* variables = type->GetVariableIter()) {
+                for (std::uint32_t i = 0; i < type->GetNumVariables(); ++i) {
+                    if (variables[i].name == name) {
+                        index = i;
+                        break;
+                    }
+                }
+            }
+        }
+        return index == missing ? nullptr : std::addressof(object.variables[offset + index]);
+    }
+
+    // NFF's warp counts one per second tick into warpCDTime and teleports once the count reaches
+    // nwsWarpStart. The count keeps climbing while the interval is parked, so handing the player's
+    // interval back fires a warp on the very next tick: every door autosave pulled a Relax camp
+    // into the new area, and it walked straight back out. Restarting the count gives Walk With Me a
+    // full interval to park it again first.
+    bool RestartFrameworkWarpCount()
+    {
+        auto* quest = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESQuest>(NFF_SANDBOX_QUEST, NFF_PLUGIN);
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        auto* policy = vm ? vm->GetObjectHandlePolicy() : nullptr;
+        if (!quest || !policy) {
+            return false;
+        }
+        RE::BSTSmartPointer<RE::BSScript::Object> script;
+        const auto handle = policy->GetHandleForObject(RE::FormType::Quest, quest);
+        if (!vm->FindBoundObject(handle, "nwsFollowerSandboxScript", script) || !script) {
+            return false;
+        }
+        auto* count = ScriptVariable(*script, "warpCDTime");
+        if (!count || !count->IsFloat()) {
+            return false;
+        }
+        count->SetFloat(0.0F);
+        return true;
+    }
     float Distance2D(RE::NiPoint3 a_left, RE::NiPoint3 a_right)
     {
         const float x = a_left.x - a_right.x;
@@ -329,6 +387,8 @@ namespace
             return "Rear";
         case Wayfarer::FormationMode::kCompanion:
             return "Companion";
+        case Wayfarer::FormationMode::kCustom:
+            return "Custom";
         default:
             return "Natural";
         }
@@ -416,6 +476,7 @@ namespace Wayfarer
         Settings::GetSingleton().Load();
         const auto& settings = Settings::GetSingleton().Get();
         enabled = settings.enabled;
+        SetCustomFormation(settings.customFormation);
         mode = settings.mode;
         initialized = true;
         companionPush.ticket = static_cast<std::int32_t>(GetTickCount64() & 0x3fffffff);
@@ -444,6 +505,7 @@ namespace Wayfarer
             return;
         }
         UpdateFollowerDialogue(dt);
+        UpdateFrameworkCatchup();
         UpdateVictoryCleanup(dt);
         UpdateCompanionPush();
         if (recallRequest.pending) {
@@ -481,11 +543,6 @@ namespace Wayfarer
         }
         EndConversationAwareness();
         const auto& settings = Settings::GetSingleton().Get();
-        wakeTimer += dt;
-        if (wakeTimer >= 2.0F) {
-            wakeTimer = 0.0F;
-            WakeQuest();
-        }
         if (loadReleaseTime > 0.0F) {
             loadReleaseTime -= dt;
             ResetVictoryCelebration(false);
@@ -559,8 +616,9 @@ namespace Wayfarer
             sandbox.Reset();
         }
         auto restTuning = settings.sandbox;
-        // A companion waiting at a find would otherwise be pulled into temporary rest.
-        if (regroup.active || HasLootScouts()) {
+        // A companion waiting at a find, or waiting to lead the way, would otherwise be pulled
+        // into temporary rest.
+        if (regroup.active || HasLootScouts() || HasPathfinder()) {
             restTuning.automatic = false;
         }
         sandbox.Update({pos.x, pos.y}, Length({velocity.x, velocity.y}), dt,
@@ -574,11 +632,13 @@ namespace Wayfarer
             ReleaseAll(true);
             LogGlobalDiagnostic("waiting for sustained movement");
             UpdateLootScouts(*player, dt);
+            UpdatePathfinder(*player, dt);
             return;
         }
         LogGlobalDiagnostic(nullptr);
         UpdateBanterMotion(*player);
         UpdateLootScouts(*player, dt);
+        UpdatePathfinder(*player, dt);
         updateTimer += dt;
         traceTimer += dt;
         if (updateTimer < settings.updateInterval) {
@@ -614,13 +674,28 @@ namespace Wayfarer
                 }
 
                 if (HandHolding::OwnsMovement(id)) {
-                    if (follower.travelActive || follower.sandboxActive) {
+                    const auto approach = HandHolding::GetApproach();
+                    bool continueTravel = false;
+                    if (handEnabled && !sandbox.active && approach.actor == id && approach.handoffTravel) {
+                        auto* alias = GetRefAlias(EnsureQuest(), FollowerAlias(follower.slot));
+                        auto* package = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESPackage>(
+                            PackageLocal(follower.slot), settings.pluginName);
+                        continueTravel = HandHolding::ContinueHandoffTravel(
+                            true, follower.travelActive, alias && alias->GetReference() == actor.get(),
+                            package && actor->GetCurrentPackage() == package);
+                    }
+                    if (continueTravel) {
+                        // GetSlotFollower still returns none during handoff: only
+                        // move the existing marker until the script clears its alias.
+                        ApplyTravel(follower, *actor, *player, elapsed);
+                    }
+                    else if (follower.travelActive || follower.sandboxActive) {
                         ReleaseTravel(follower, actor.get(), true);
                     }
                     continue;
                 }
-                if (follower.scout.Active()) {
-                    continue; // UpdateLootScouts drives this companion.
+                if (follower.scout.Active() || follower.pathfinder.Active()) {
+                    continue; // UpdateLootScouts or UpdatePathfinder drives this companion.
                 }
                 if (IsRelaxing() && follower.anchorSet && (!actor->Is3DLoaded() || actor->IsInCombat())) {
                     EndRestPose(follower, actor.get());
@@ -787,6 +862,11 @@ namespace Wayfarer
         catchups.clear();
         catchupHolds.clear();
         playerTrail.Clear();
+        // The loaded save holds the player's own NFF timer; the next update decides afresh.
+        frameworkWarp = {};
+        frameworkCatchup = false;
+        pathfinderSeen.clear();
+        pathfinderScan = pathfinderCooldown = 0;
         companionPush.Reset();
         order = PartyOrder::kTravel;
         mode = Settings::GetSingleton().Get().mode;
@@ -813,7 +893,13 @@ namespace Wayfarer
         havePlayerPosition = false;
         scanTimer = Settings::GetSingleton().Get().scanInterval;
         updateTimer = traceTimer = 0.0F;
-        wakeTimer = 2.0F;
+        aliasSyncQueue.Reset();
+        aliasLookActors = {};
+        aliasLookTargets = {};
+        aliasCleanupPending = {};
+        aliasSyncTicket = 0;
+        aliasSyncSession = static_cast<std::int32_t>(static_cast<std::uint32_t>(aliasSyncSession) + 1);
+        aliasSyncTimer = aliasSyncRetryDelay = 0.25F;
         ForgetLootArea();
         lootScanTimer = lootClock = 0.0F;
         static_cast<void>(Loot::ConsumeActivations());
@@ -876,6 +962,10 @@ namespace Wayfarer
     void FormationController::SetMode(FormationMode a_mode, bool a_notify)
     {
         std::lock_guard lock(stateMutex);
+        if (a_mode == FormationMode::kCustom && !CustomFormation().Defined()) {
+            Notify("Create a custom formation in Travel settings first.");
+            return;
+        }
         ResetVictoryCelebration();
         if (mode != a_mode || sandbox.active || a_mode != FormationMode::kSandbox) {
             naturalPatternReady = false;
@@ -889,7 +979,7 @@ namespace Wayfarer
             }
         }
         order = PartyOrder::kTravel;
-        mode = static_cast<FormationMode>(std::clamp(static_cast<int>(a_mode), 0, 5));
+        mode = static_cast<FormationMode>(std::clamp(static_cast<int>(a_mode), 0, orderCount - 1));
         if (mode == FormationMode::kVanilla) {
             regroup.Reset();
             intent.Reset();
@@ -921,7 +1011,11 @@ namespace Wayfarer
     {
         std::lock_guard lock(stateMutex);
         order = PartyOrder::kTravel;
-        SetMode(static_cast<FormationMode>((static_cast<int>(mode) + 1) % 6));
+        auto next = static_cast<FormationMode>((static_cast<int>(mode) + 1) % orderCount);
+        if (next == FormationMode::kCustom && !CustomFormation().Defined()) {
+            next = FormationMode::kDynamic;
+        }
+        SetMode(next);
     }
 
     FormationMode FormationController::GetMode() const noexcept
@@ -940,6 +1034,7 @@ namespace Wayfarer
         roleTimer = 1;
         roleCooldown = 0;
         const auto& settings = Settings::GetSingleton().Get();
+        SetCustomFormation(settings.customFormation);
         mode = settings.mode;
         SetEnabled(settings.enabled, false);
         intent.Reset();
@@ -1630,14 +1725,17 @@ namespace Wayfarer
         if (player.GetCurrentScene()) {
             return "Wait until the scene ends";
         }
-        // Riding shares the sitting state, and a rider may still call the party.
-        if ((!player.IsOnMount() && state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) ||
-            state->IsBleedingOut() || state->IsUnconscious()) {
-            return "Stand up first";
+        // A seated player (a chair, a workbench, a carriage) may still call the party; the
+        // landing search starts from where they sit.
+        if (state->IsBleedingOut() || state->IsUnconscious()) {
+            return "Recover first";
         }
         return nullptr;
     }
 
+    // Deliberately short, like Nether's Follower Framework's: a seated player, a crafting
+    // station or locked movement no longer holds anyone back. What remains would put a companion
+    // somewhere they cannot stand, or into a scene they are not part of.
     const char* FormationController::CatchupPlayerRejection(RE::PlayerCharacter& player) const
     {
         if (const auto* reason = RecallPlayerRejection(player)) {
@@ -1646,22 +1744,45 @@ namespace Wayfarer
         if (player.IsDead() || player.IsInKillMove()) {
             return "player unavailable";
         }
-        if (auto* controls = RE::ControlMap::GetSingleton(); controls && !controls->IsMovementControlsEnabled()) {
-            return "player movement locked";
+        const auto* state = player.AsActorState();
+        RE::NiPointer<RE::Actor> mount;
+        const bool mounted = player.IsOnMount() && player.GetMount(mount) && mount;
+        const auto* mountState = mounted ? mount->AsActorState() : nullptr;
+        if ((state && state->IsFlying()) || (mountState && mountState->IsFlying())) {
+            return "player is flying"; // On a dragon: the ground below is out of reach.
+        }
+        if (mounted ? mount->IsInMidair() : player.IsInMidair()) {
+            return "player is in the air";
         }
         return nullptr;
     }
 
+    bool FormationController::IsTravelCompanion(RE::Actor& actor) const
+    {
+        const auto id = actor.GetFormID();
+        return !explicitExclusions.contains(id) && (IsRegisteredFollower(id) || !CandidateRejection(actor));
+    }
+
     const char* FormationController::RecallActorRejection(RE::Actor& actor, bool automatic) const
+    {
+        if (!actor.AsActorState() || actor.IsPlayerRef() || actor.IsDead() || actor.IsDisabled()) {
+            return "unavailable";
+        }
+        if (!IsTravelCompanion(actor)) {
+            return "not a travelling companion";
+        }
+        return RecallStateRejection(actor, automatic);
+    }
+
+    // Whether this actor can be moved right now, whoever they follow. Seated or sleeping is not a
+    // reason: MoveTo stands them up, which is what Nether's Follower Framework does too.
+    const char* FormationController::RecallStateRejection(RE::Actor& actor, bool automatic) const
     {
         const auto* state = actor.AsActorState();
         auto* player = RE::PlayerCharacter::GetSingleton();
         const auto id = actor.GetFormID();
         if (!state || !player || actor.IsPlayerRef() || actor.IsDead() || actor.IsDisabled()) {
             return "unavailable";
-        }
-        if (explicitExclusions.contains(id) || (!IsRegisteredFollower(id) && CandidateRejection(actor))) {
-            return "not a travelling companion";
         }
         if (actor.AsActorValueOwner()->GetActorValue(RE::ActorValue::kWaitingForPlayer) != 0) {
             return "waiting";
@@ -1677,9 +1798,6 @@ namespace Wayfarer
         }
         if (actor.IsOnMount()) {
             return "riding";
-        }
-        if (state->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) {
-            return "sitting";
         }
         if (state->GetLifeState() == RE::ACTOR_LIFE_STATE::kRestrained) {
             return "restrained";
@@ -1699,6 +1817,17 @@ namespace Wayfarer
         }
         if (const auto entry = managed.find(id); entry != managed.end() && entry->second.scout.Active()) {
             return "scouting loot";
+        }
+        if (const auto entry = managed.find(id); entry != managed.end() && entry->second.pathfinder.Active()) {
+            return "pointing out a place";
+        }
+        // NFF leaves its own looters alone, and so does its stand-in.
+        if (auto* data = RE::TESDataHandler::GetSingleton(); data && actor.GetCurrentPackage()) {
+            for (const auto loot : NFF_LOOT_PACKAGES) {
+                if (actor.GetCurrentPackage() == data->LookupForm<RE::TESPackage>(loot, NFF_PLUGIN)) {
+                    return "looting for NFF";
+                }
+            }
         }
         return nullptr;
     }
@@ -2073,6 +2202,74 @@ namespace Wayfarer
                                           : "Temporary relaxation disabled.");
     }
 
+    bool FormationController::HoldingRelaxCamp() const
+    {
+        return IsRelaxing() && Settings::GetSingleton().Get().holdRelaxing && !managed.empty();
+    }
+
+    // Nether's Follower Framework teleports its roster on its own timer, 512 units behind the
+    // player with no ground check. While Walk With Me teleports, it does that job for NFF's whole
+    // roster as well and parks NFF's timer, so the two never race and a Relax camp stays a camp.
+    void FormationController::UpdateFrameworkCatchup()
+    {
+        auto* ui = RE::UI::GetSingleton();
+        if (ui && (ui->GameIsPaused() || ui->IsMenuOpen(RE::JournalMenu::MENU_NAME))) {
+            return; // NFF's menu may be showing the player's value; park again afterwards.
+        }
+        auto* data = RE::TESDataHandler::GetSingleton();
+        auto* interval = data ? data->LookupForm<RE::TESGlobal>(NFF_WARP_INTERVAL, NFF_PLUGIN) : nullptr;
+        auto* allowed = data ? data->LookupForm<RE::TESGlobal>(NFF_WARP_ENABLED, NFF_PLUGIN) : nullptr;
+        const auto& settings = Settings::GetSingleton().Get();
+        const bool owns =
+            OwnsFrameworkCatchup(interval && allowed, allowed && allowed->value == 1.0F,
+                                 settings.replaceFrameworkCatchup,
+                                 initialized && enabled && mode != FormationMode::kVanilla,
+                                 settings.teleportCatchup, HoldingRelaxCamp());
+        if (owns != frameworkCatchup) {
+            frameworkCatchup = owns;
+            logger::info("[Catchup] {} Nether's Follower Framework catch-up", owns ? "Taking over" : "Returning");
+        }
+        if (!interval) {
+            return;
+        }
+        const float previous = interval->value;
+        if (const float value = frameworkWarp.Update(owns, previous); std::isfinite(value)) {
+            interval->value = value;
+            if (owns) {
+                logger::info("[Catchup] Parked NFF's catch-up timer (the player's value is {:.0f} s)", previous);
+            }
+            else {
+                logger::info("[Catchup] Restored NFF's catch-up timer to {:.0f} s{}", value,
+                             RestartFrameworkWarpCount() ? "" : " (its countdown could not be restarted)");
+            }
+        }
+    }
+
+    void FormationController::ReleaseFrameworkCatchup(const char* reason)
+    {
+        std::lock_guard lock(stateMutex);
+        auto* data = RE::TESDataHandler::GetSingleton();
+        auto* interval = data ? data->LookupForm<RE::TESGlobal>(NFF_WARP_INTERVAL, NFF_PLUGIN) : nullptr;
+        if (!interval) {
+            return;
+        }
+        if (const float value = frameworkWarp.Release(interval->value); std::isfinite(value)) {
+            interval->value = value;
+            logger::info("[Catchup] Restored NFF's catch-up timer to {:.0f} s {}{}", value, reason,
+                         RestartFrameworkWarpCount() ? "" : " (its countdown could not be restarted)");
+        }
+    }
+
+    // Saves written by earlier builds hold NFF's full interval beside a count that climbed while it
+    // was parked, so the first tick after loading one would warp everyone at once.
+    void FormationController::RestartFrameworkCatchupAfterLoad()
+    {
+        std::lock_guard lock(stateMutex);
+        if (Settings::GetSingleton().Get().replaceFrameworkCatchup && RestartFrameworkWarpCount()) {
+            logger::info("[Catchup] Restarted NFF's catch-up countdown after loading");
+        }
+    }
+
     void FormationController::UpdateTeleportCatchup(RE::PlayerCharacter& player, float dt)
     {
         RecordPlayerTrail(player);
@@ -2083,20 +2280,27 @@ namespace Wayfarer
         const float elapsed = std::min(catchupTimer, 1.0F);
         catchupTimer = 0;
         const auto& settings = Settings::GetSingleton().Get();
-        // A Relax order keeps companions at their camp on purpose, even after the player leaves.
-        if (!enabled || !settings.teleportCatchup || IsRelaxing()) {
+        if (!enabled || (!settings.teleportCatchup && !frameworkCatchup)) {
             catchups.clear();
             catchupHolds.clear();
             return;
         }
-        // Temporary rest lets companions roam; that is not being lost.
-        const float threshold = sandbox.active
-                                    ? std::max(settings.teleportDistance, settings.sandbox.maxRadius + 800.0F)
-                                    : settings.teleportDistance;
+        // Roaming is not being lost: temporary rest, and a Relax camp the player lets follow them.
+        const float roaming = std::max(settings.teleportDistance, settings.sandbox.maxRadius + 800.0F);
+        const bool holdCamp = HoldingRelaxCamp();
         const char* playerReason = CatchupPlayerRejection(player);
         if (!playerReason) {
             playerReason = RestrictedTeleportArea(player);
         }
+        // NFF's own sandbox keeps its group within nwsSandboxRange of a marker that trails the
+        // player by up to 1024 units, and NFF never teleports a relaxing group.
+        auto* data = RE::TESDataHandler::GetSingleton();
+        auto* nffSandbox = frameworkCatchup && data
+                               ? data->LookupForm<RE::TESPackage>(NFF_SANDBOX_PACKAGE, NFF_PLUGIN)
+                               : nullptr;
+        auto* nffRange = nffSandbox ? data->LookupForm<RE::TESGlobal>(NFF_SANDBOX_RANGE, NFF_PLUGIN) : nullptr;
+        const float nffRoaming =
+            std::max(settings.teleportDistance, (nffRange ? nffRange->value : 2048.0F) + 1024.0F);
         const auto pos = PlayerGround(player);
         const auto maxFollowers = static_cast<std::size_t>(settings.maxFollowers);
         std::unordered_set<RE::FormID> present;
@@ -2106,9 +2310,30 @@ namespace Wayfarer
         for (auto* actor : RecallRoster()) {
             const auto id = actor->GetFormID();
             present.insert(id);
-            const char* reason = playerReason ? playerReason : RecallActorRejection(*actor, true);
-            if (!reason && ++eligible > maxFollowers) {
+            const bool companion = IsTravelCompanion(*actor);
+            // With NFF's timer parked, everyone NFF would have teleported is covered here.
+            const bool covered =
+                (companion && settings.teleportCatchup) || (frameworkCatchup && IsNFFFollower(*actor));
+            const bool camper = IsRelaxing() && managed.contains(id);
+            const char* reason = playerReason;
+            if (!reason && !covered) {
+                reason = "not a travelling companion";
+            }
+            if (!reason && camper && holdCamp) {
+                reason = "relaxing at camp";
+            }
+            if (!reason) {
+                reason = RecallStateRejection(*actor, true);
+            }
+            if (!reason && companion && ++eligible > maxFollowers) {
                 reason = "iMaxFollowers reached";
+            }
+            float threshold = settings.teleportDistance;
+            if (camper || (sandbox.active && managed.contains(id))) {
+                threshold = roaming;
+            }
+            if (nffSandbox && actor->GetCurrentPackage() == nffSandbox) {
+                threshold = nffRoaming;
             }
             // Another interior or worldspace, or an exterior cell too far away to be loaded.
             const bool separated = !actor->Is3DLoaded() || !InSameTravelSpace(*actor, player);
@@ -2140,10 +2365,11 @@ namespace Wayfarer
             state.Attempt(true);
             TeleportCompanion(*actor, landing.point, player);
             reserved.push_back(landing.point);
-            logger::info("[Catchup] recalled {} ({:08X}) from {} via {} to ({:.0f}, {:.0f}, {:.0f})",
+            logger::info("[Catchup] recalled {} ({:08X}) from {} via {} to ({:.0f}, {:.0f}, {:.0f}){}",
                          actor->GetName(), id,
                          separated ? std::string{"another cell"} : fmt::format("{:.0f} units", distance),
-                         landing.source, landing.point.x, landing.point.y, landing.point.z);
+                         landing.source, landing.point.x, landing.point.y, landing.point.z,
+                         companion ? "" : " for NFF");
         }
         std::erase_if(catchups, [&](const auto& entry) { return !present.contains(entry.first); });
         std::erase_if(catchupHolds, [&](const auto& entry) { return !present.contains(entry.first); });
@@ -2164,12 +2390,15 @@ namespace Wayfarer
         if (roleTimer < .5F || roleCooldown > 0) {
             return;
         }
+        const float sinceCheck = roleTimer;
         roleTimer = 0;
         std::vector<std::pair<RE::FormID, ManagedFollower*>> followers;
+        bool detouring = false;
         for (auto& [id, f] : managed) {
             auto actor = f.handle.get();
             if (actor && UsabilityRejection(*actor, player).empty()) {
                 followers.emplace_back(id, &f);
+                detouring |= f.avoidance.active;
             }
         }
         std::sort(followers.begin(), followers.end(), [](auto& a, auto& b) { return a.first < b.first; });
@@ -2205,11 +2434,26 @@ namespace Wayfarer
         }
         std::vector<Vec2> actors, goals;
         std::vector<int> previous;
-        for (std::size_t role = 0; role < followers.size(); ++role) {
-            const auto planned = PartyRole(mode, static_cast<int>(role), travelPartyCount, naturalPatternSeed,
+        // A custom formation may reserve places for particular companions: they take theirs, and
+        // everyone else shares out the rest in the player's numbering.
+        const bool custom = mode == FormationMode::kCustom;
+        std::vector<int> reserved, open;
+        if (custom) {
+            std::vector<std::string> keys;
+            for (auto& [id, f] : followers) {
+                auto actor = f->handle.get();
+                keys.push_back(actor ? HandHolding::ReferenceKey(*actor) : std::string{});
+            }
+            reserved = Custom::ReservedRoles(CustomFormation(), keys);
+            open = Custom::OpenRoles(CustomFormation(), reserved,
+                                     static_cast<int>(std::count(reserved.begin(), reserved.end(), -1)));
+        }
+        for (std::size_t index = 0; index < followers.size(); ++index) {
+            const int role = custom ? (index < open.size() ? open[index] : 0) : static_cast<int>(index);
+            const auto planned = PartyRole(mode, role, travelPartyCount, naturalPatternSeed,
                                            settings.travel.naturalStragglerDistance);
             const auto desired =
-                intent.GoalAt(mode, planned.offset, interior, settings.preferredSide, settings.travel,
+                intent.GoalAt(mode, planned.offset, interior, custom ? 1 : settings.preferredSide, settings.travel,
                               planned.straggler ? settings.travel.naturalStragglerDistance : 0);
             const auto grounded = navigation.Resolve(player.GetPosition(), desired, intent.Direction());
 
@@ -2243,6 +2487,29 @@ namespace Wayfarer
             }
         }
         auto roles = AssignNearestRoles(actors, goals, previous);
+        if (custom) {
+            // `goals` holds the open roles; nearest-assign only the unreserved companions to them.
+            std::vector<Vec2> freeActors;
+            std::vector<int> freePrevious, freeIndex;
+            for (std::size_t i = 0; i < followers.size(); ++i) {
+                if (reserved[i] < 0) {
+                    freeActors.push_back(actors[i]);
+                    const auto at = std::find(open.begin(), open.end(), previous[i]);
+                    freePrevious.push_back(at == open.end() ? -1 : static_cast<int>(at - open.begin()));
+                    freeIndex.push_back(static_cast<int>(i));
+                }
+            }
+            const std::span<const Vec2> freeGoals(goals.data(), freeActors.size());
+            const auto freeRoles = AssignNearestRoles(freeActors, freeGoals, freePrevious);
+            for (std::size_t i = 0; i < followers.size(); ++i) {
+                roles[i] = reserved[i];
+            }
+            for (std::size_t k = 0; k < freeIndex.size() && k < freeRoles.size(); ++k) {
+                const int goal = freeRoles[k];
+                roles[freeIndex[k]] = goal >= 0 && goal < static_cast<int>(open.size()) ? open[goal] : open[k];
+            }
+            pairs.clear(); // The player placed everyone; banter pairs do not rearrange them.
+        }
         if (!pairs.empty()) {
 
             auto paired = PairNearbyRoles(actors, goals, previous, pairs, intent.Direction());
@@ -2252,6 +2519,13 @@ namespace Wayfarer
             if (!paired.empty()) {
                 roles = std::move(paired);
             }
+        }
+        // Hold the proposal until it has won for a while. Someone stepping round an obstacle is
+        // briefly off the route, so nothing is swapped mid-detour, though an unplaced companion
+        // still gets a role at once.
+        roles = roleDebounce.Update(previous, roles, detouring ? 0.0F : sinceCheck);
+        if (roles.empty()) {
+            return;
         }
         bool changed = false;
         for (std::size_t i = 0; i < roles.size(); ++i) {
@@ -2346,10 +2620,11 @@ namespace Wayfarer
         const bool handGuided = handApproach.actor == actor.GetFormID();
         const bool classicHands = handGuided && settings.handHolding.method == HandHolding::Method::Classic;
         const bool handHoldPosition = handGuided && !classicHands && handApproach.holdPosition;
+        const bool handHandoff = handGuided && handApproach.handoffTravel;
         const bool handAttached = classicHands && HandHolding::IsAttached(actor.GetFormID());
         const bool handLocomotion = classicHands && (handAttached || handApproach.closing);
         RE::NiPoint3 handVelocity{};
-        if (classicHands) {
+        if (classicHands || handHandoff) {
             player.GetLinearVelocity(handVelocity);
         }
         if (handLocomotion) {
@@ -2405,6 +2680,9 @@ namespace Wayfarer
             PartyRole(mode, f.role >= 0 ? f.role : f.slot, travelPartyCount, naturalPatternSeed,
                       settings.travel.naturalStragglerDistance, actor.GetFormID());
         auto offset = planned.offset;
+        if (mode != FormationMode::kCustom) {
+            offset = PersonalOffset(offset, PersonalityFor(actor)); // Sociable companions keep closer.
+        }
         const float setback = planned.straggler ? settings.travel.naturalStragglerDistance : 0;
         f.roleSetback =
             f.haveRoleOffset ? BlendRoleOffset({0, f.roleSetback}, {0, setback}, dt).longitudinal : setback;
@@ -2413,7 +2691,8 @@ namespace Wayfarer
         const float rearBlend =
             std::clamp(f.roleSetback / std::max(1.0F, settings.travel.naturalStragglerDistance), 0.0F, 1.0F);
         const auto personalIntent = intent.WithDirection(f.individual.Direction());
-        Vec2 desired = personalIntent.GoalAt(mode, f.roleOffset, interior, settings.preferredSide,
+        Vec2 desired = personalIntent.GoalAt(mode, f.roleOffset, interior,
+                                             mode == FormationMode::kCustom ? 1 : settings.preferredSide,
                                              settings.travel, f.roleSetback, rearBlend);
         const auto direction = classicHands
                                    ? HandHolding::LocomotionDirection(handAttached, handApproach.heading,
@@ -2551,13 +2830,16 @@ namespace Wayfarer
             (target->x - desired.x) * direction.x + (target->y - desired.y) * direction.y, 0.0F, lead);
         const float paceDistance =
             f.avoidance.active ? std::min(distance, 100.0F) : std::max(0.0F, distance - routedLead);
-        auto pace = ChoosePace(classicHands ? handSpeed : intent.Speed(), handLocomotion ? 0 : paceDistance,
-                               f.goal.pace, classicHands ? handSpeed > 5 : intent.IsMoving());
+        const bool immediateHandPace = classicHands || handHandoff;
+        auto pace =
+            ChoosePace(immediateHandPace ? handSpeed : intent.Speed(), handLocomotion ? 0 : paceDistance,
+                       f.goal.pace, immediateHandPace ? handSpeed > 5 : intent.IsMoving());
         if (f.avoidance.active && pace == TravelPace::kRun) {
             pace = TravelPace::kJog;
         }
         const bool holdRepath = handHoldPosition && HandHolding::RepathArrivalHold(f.goal, candidate);
-        if (classicHands || holdRepath || obstacleChanged ||
+        const bool handoffRepath = handHandoff && HandHolding::RepathHandoffTravel(f.goal, candidate);
+        if (classicHands || holdRepath || handoffRepath || obstacleChanged ||
             f.goal.ShouldCommit(candidate, actorXY, pace, travelTuning, intent.Speed(), intent.IsMoving())) {
 
             package->packData.packFlags.set(RE::PACKAGE_DATA::GeneralFlag::kPreferredSpeed);
@@ -2569,7 +2851,7 @@ namespace Wayfarer
             f.goal.Commit(candidate, actorXY, pace);
             f.travelActive = true;
         }
-        if (holdRepath ||
+        if (holdRepath || handoffRepath ||
             (handLocomotion
                  ? HandHolding::RepathAttached(f.goal, actorXY, handSpeed, ownsPackage, travelTuning)
                  : f.goal.ShouldRepath(actorXY, intent.Speed(), intent.IsMoving(), ownsPackage,
@@ -2622,9 +2904,9 @@ namespace Wayfarer
         if (settings.traceMovement && traceDue) {
             if (handGuided) {
                 logger::info("[HandHolding/Approach] {} target=({:.1f},{:.1f}) remaining={:.1f} "
-                             "radius={:.0f} ownsPackage={} classic={} arrivalHold={}",
+                             "radius={:.0f} ownsPackage={} classic={} arrivalHold={} handoffTravel={}",
                              actor.GetName(), candidate.x, candidate.y, distance, travelTuning.arrivalRadius,
-                             ownsPackage, classicHands, handHoldPosition);
+                             ownsPackage, classicHands, handHoldPosition, handHandoff);
             }
             RE::NiPoint3 velocity{};
             actor.GetLinearVelocity(velocity);
@@ -2888,6 +3170,8 @@ namespace Wayfarer
         }
 
         const auto place = PlaceFor(actor);
+        // A Relax order settles in; temporary rest is a short stop and keeps to brief standing poses.
+        const bool settled = IsRelaxing();
         const auto roll = RestPose::Mix(id + pose.sequence * 3571);
         auto at = AreaFeature::None;
         if (f.pendingFeature != AreaFeature::None &&
@@ -2900,18 +3184,18 @@ namespace Wayfarer
             at = f.feature = std::exchange(f.pendingFeature, AreaFeature::None);
             f.featureRef = std::exchange(f.pendingFeatureRef, {});
             f.featurePoint = f.pendingFeaturePoint;
-            f.activity = FeatureActivity(at, place, roll, tuning);
+            f.activity = FeatureActivity(at, place, roll, tuning, settled);
         }
         else if (tuning.areaActivities && f.feature != AreaFeature::None &&
                  Distance2D(actor.GetPosition(), f.featurePoint) < (FacesFeature(f.feature) ? 320.0F : 720.0F) &&
                  roll % 4 != 0) {
             at = f.feature;
-            f.activity = FeatureFollowUp(at, place, roll >> 3, tuning);
+            f.activity = FeatureFollowUp(at, place, roll >> 3, tuning, settled);
         }
         else {
             f.feature = AreaFeature::None;
             f.featureRef = {};
-            f.activity = ChoosePlaceActivity(place, context, roll, tuning, TraitsFor(actor));
+            f.activity = ChoosePlaceActivity(place, context, roll, tuning, TraitsFor(actor), settled);
         }
         if ((f.activity == RestActivity::Eat || f.activity == RestActivity::Drink) && refreshments &&
             std::count_if(managed.begin(), managed.end(), [](const auto& entry) {
@@ -3921,7 +4205,11 @@ namespace Wayfarer
         f.sandboxActive = f.travelActive = true;
 
         f.sandboxRadius = activityRadius;
-        const int meals = MealsAllowed(ContextFor(actor), settings.sandbox) ? 1 : 0;
+        // Skyrim's own sandbox eats whatever food they carry, anywhere; only allow it where a meal
+        // fits the place (an inn, a home, a hall, a campfire), and on a short stop only at the inn.
+        const bool atFire =
+            f.feature == AreaFeature::Fire && Distance2D(actor.GetPosition(), f.featurePoint) < 420.0F;
+        const int meals = NativeMeals(PlaceFor(actor), context, atFire, IsRelaxing(), settings.sandbox) ? 1 : 0;
         if (f.mealsState != meals) {
             auto* source = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESPackage>(
                 meals ? SocialPackageLocal(f.slot) : PosePackageLocal(f.slot), settings.pluginName);
@@ -4029,7 +4317,7 @@ namespace Wayfarer
             if (HandHolding::OwnsMovement(id)) {
                 return nullptr;
             }
-            if (!sandbox.active && !follower.scout.Active() &&
+            if (!sandbox.active && !follower.scout.Active() && !follower.pathfinder.Active() &&
                 !HandHolding::TravelRequested(intent.CanTravel(), mode == FormationMode::kCompanion,
                                               Settings::GetSingleton().Get().handHolding, id,
                                               HandHolding::GetApproach().actor)) {
@@ -4087,23 +4375,165 @@ namespace Wayfarer
         return questCache;
     }
 
-    void FormationController::WakeQuest()
+    bool FormationController::AliasSyncAllowed(std::int32_t ticket, std::int32_t session)
     {
+        std::lock_guard lock(stateMutex);
+        return ticket != 0 && ticket == aliasSyncTicket && session == aliasSyncSession &&
+               aliasSyncQueue.Pending() && !ShouldSuspendForDialogue();
+    }
+
+    void FormationController::ReportAliasLook(std::int32_t slot, RE::Actor* actor, RE::Actor* target,
+                                              std::int32_t ticket, std::int32_t session)
+    {
+        std::lock_guard lock(stateMutex);
+        if (slot < 0 || slot >= PARTY_CAPACITY || ticket == 0 || ticket != aliasSyncTicket ||
+            session != aliasSyncSession || !aliasSyncQueue.Pending()) {
+            return;
+        }
+        aliasLookActors[slot] = actor && target ? actor->GetFormID() : 0;
+        aliasLookTargets[slot] = actor && target ? target->GetFormID() : 0;
+    }
+
+    void FormationController::ReportAliasCleanup(std::int32_t slot, bool pending, std::int32_t ticket,
+                                                 std::int32_t session)
+    {
+        std::lock_guard lock(stateMutex);
+        if (slot >= 0 && slot < PARTY_CAPACITY && ticket != 0 && ticket == aliasSyncTicket &&
+            session == aliasSyncSession && aliasSyncQueue.Pending()) {
+            aliasCleanupPending[slot] = pending;
+        }
+    }
+
+    void FormationController::CompleteAliasSync(std::uint64_t ticket, std::int32_t session, bool completed)
+    {
+        std::lock_guard lock(stateMutex);
+        if (session != aliasSyncSession || !aliasSyncQueue.Complete(ticket, completed)) {
+            return;
+        }
+        aliasSyncTicket = 0;
+        aliasSyncRetryDelay = completed ? 0.25F : std::min(8.0F, aliasSyncRetryDelay * 2.0F);
+        aliasSyncTimer = 0;
+    }
+
+    void FormationController::UpdateAliasSync(float dt)
+    {
+        std::lock_guard lock(stateMutex);
+        if (!initialized || !std::isfinite(dt) || dt <= 0 || dt > 1 || aliasSyncQueue.Pending()) {
+            return;
+        }
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* ui = RE::UI::GetSingleton();
+        if (!player || !player->Is3DLoaded() || !player->GetParentCell() || !ui || ui->GameIsPaused() ||
+            ShouldSuspendForDialogue()) {
+            return;
+        }
+        aliasSyncTimer += dt;
+        if (aliasSyncTimer < aliasSyncRetryDelay) {
+            return;
+        }
+        aliasSyncTimer = 0;
         auto* quest = EnsureQuest();
         auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
         auto* policy = vm ? vm->GetObjectHandlePolicy() : nullptr;
         if (!quest || !quest->IsRunning() || !policy) {
             return;
         }
+
+        // Inspect native state cheaply. Papyrus only runs for changed slots or ready actions.
+        // In particular, disabled cleanup still runs, then the bridge becomes idle.
+        AliasSyncSnapshotSet snapshot{};
+        std::uint16_t work = 0;
+        const bool resting = HasRestActivities();
+        const auto id = [](const RE::TESForm* form) { return form ? form->GetFormID() : 0; };
+        const auto differs = [quest, &id](std::uint32_t aliasID, std::uint32_t desired) {
+            auto* alias = GetRefAlias(quest, aliasID);
+            return alias && id(alias->GetReference()) != desired;
+        };
+        for (std::uint32_t slot = 0; slot < PARTY_CAPACITY; ++slot) {
+            auto& state = snapshot[slot];
+            auto* actor = GetSlotFollower(slot);
+            auto* marker = actor ? markerPool[slot].get().get() : nullptr;
+            if (!marker) {
+                actor = nullptr;
+            }
+            state.follower = id(actor);
+            state.marker = id(marker);
+            state.gather = id(GetGatherMarker(slot));
+            state.seat = resting ? id(GetRestSeat(slot)) : 0;
+            state.social = resting && actor ? id(GetSocialTarget(slot)) : 0;
+            state.handoff = GetTetherHandoffTicket(slot);
+            bool needed =
+                aliasCleanupPending[slot] || aliasLookActors[slot] != (state.social ? state.follower : 0) ||
+                aliasLookTargets[slot] != state.social || differs(FollowerAlias(slot), state.follower) ||
+                (actor && differs(MarkerAlias(slot), state.marker)) ||
+                (state.gather && differs(GatherAlias(slot), state.gather)) ||
+                (state.seat && differs(SeatAlias(slot), state.seat));
+            // Marker, seat and gathering aliases intentionally retain reusable references
+            // when no target is requested. Comparing them to None would loop forever.
+            if (resting && actor) {
+                auto& follower = managed.at(actor->GetFormID());
+                if (follower.tableIdle) {
+                    if (auto chair = follower.tableSeat.get()) {
+                        needed |= SeatedIn(*actor, chair.get()) && !IsSpeaking(*actor);
+                    }
+                    else {
+                        follower.tableIdle = 0;
+                    }
+                }
+                else if (follower.restPose.kind == 1 && !follower.restPose.started &&
+                         !follower.restIdleRequested) {
+                    auto* pose = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESPackage>(
+                        PosePackageLocal(slot), Settings::GetSingleton().Get().pluginName);
+                    needed |= actor->GetCurrentPackage() == pose;
+                }
+                if (state.social) {
+                    const int index = social.Index(actor->GetFormID());
+                    needed |= (follower.patronTimer > 0 && follower.patronGesture) ||
+                              (index >= 0 && !social.gathering && social.pending[index]);
+                }
+            }
+            if (needed) {
+                work |= static_cast<std::uint16_t>(1U << slot);
+            }
+        }
+        const auto slots = aliasSyncQueue.DirtySlots(snapshot, work);
+        if (!slots) {
+            return;
+        }
+        const auto ticket = aliasSyncQueue.Begin(snapshot, slots);
+        if (!ticket) {
+            return;
+        }
+        aliasSyncTicket = static_cast<std::int32_t>(ticket % 0x7FFFFFFF) + 1;
+        const auto session = aliasSyncSession;
+        struct Completion final : RE::BSScript::IStackCallbackFunctor
+        {
+            std::function<void(bool)> done;
+            explicit Completion(std::function<void(bool)> callback) : done(std::move(callback)) {}
+            void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
+            void operator()(RE::BSScript::Variable value) override
+            {
+                if (auto* tasks = SKSE::GetTaskInterface()) {
+                    const bool completed = value.IsBool() && value.GetBool();
+                    tasks->AddTask([run = done, completed] { run(completed); });
+                }
+            }
+        };
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> result{new Completion(
+            [this, ticket, session](bool completed) { CompleteAliasSync(ticket, session, completed); })};
         const auto handle = policy->GetHandleForObject(RE::FormType::Quest, quest);
-        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> result;
-        const bool dispatched =
-            vm->DispatchMethodCall(handle, RE::BSFixedString("WayfarerQuestScript"),
-                                   RE::BSFixedString("Wake"), RE::MakeFunctionArguments(), result);
-        if (!dispatched && !questWarned) {
-            questWarned = true;
-            logger::error("[Quest] Script watchdog could not dispatch. Verify the matching ESP and "
-                          "WayfarerQuestScript.pex are installed.");
+        const bool dispatched = vm->DispatchMethodCall(
+            handle, RE::BSFixedString("WayfarerQuestScript"), RE::BSFixedString("SyncRequested"),
+            RE::MakeFunctionArguments(static_cast<std::int32_t>(slots), std::int32_t{aliasSyncTicket},
+                                      std::int32_t{session}),
+            result);
+        if (!dispatched) {
+            CompleteAliasSync(ticket, session, false);
+            if (!questWarned) {
+                questWarned = true;
+                logger::error("[Quest] Alias sync could not dispatch. Verify the matching DLL, ESP and "
+                              "WayfarerQuestScript.pex are installed.");
+            }
         }
     }
 
@@ -4164,6 +4594,7 @@ namespace Wayfarer
     void FormationController::ReleaseTravel(ManagedFollower& f, RE::Actor* actor, bool tetherHandoff)
     {
         EndLootScout(f, actor, Loot::End::Released);
+        EndPathfinder(f, actor, Pathfinder::End::Interrupted);
         SetHandApproachRadius(f, false);
         f.avoidance.Reset();
         if (actor && !tetherHandoff) {
@@ -4209,7 +4640,7 @@ namespace Wayfarer
         }
         for (auto& [formID, follower] : managed) {
             static_cast<void>(formID);
-            if (keepLootScouts && follower.scout.Active()) {
+            if (keepLootScouts && (follower.scout.Active() || follower.pathfinder.Active())) {
                 continue;
             }
             auto actorPointer = follower.handle.get();
@@ -5219,6 +5650,22 @@ namespace Wayfarer
             roleTimer = 1.0F;
             roleCooldown = 0;
         }
+        if (!(settings.customFormation == previous.customFormation)) {
+            SetCustomFormation(settings.customFormation);
+            logger::info("[Formation] Custom formation saved: {} place{}", CustomFormation().count,
+                         CustomFormation().count == 1 ? "" : "s");
+            if (mode == FormationMode::kCustom) {
+                if (!CustomFormation().Defined()) {
+                    SetMode(FormationMode::kDynamic);
+                }
+                roleTimer = 1.0F;
+                roleCooldown = 0;
+                for (auto& [id, f] : managed) {
+                    static_cast<void>(id);
+                    f.role = -1;
+                }
+            }
+        }
         return true;
     }
 
@@ -5427,7 +5874,7 @@ namespace Wayfarer
         std::vector<Scout> free;
         const auto handPartner = HandHolding::GetApproach().actor;
         for (auto& [id, f] : managed) {
-            if (f.scout.Active() || f.scoutCooldown > 0 || HandHolding::OwnsMovement(id) ||
+            if (f.scout.Active() || f.scoutCooldown > 0 || f.pathfinder.Active() || HandHolding::OwnsMovement(id) ||
                 handPartner == id ||
                 std::any_of(travelBanterPairs.begin(), travelBanterPairs.end(),
                             [&](const auto& pair) { return pair.Contains(id); })) {
@@ -5628,6 +6075,433 @@ namespace Wayfarer
         f.scoutCooldown = Loot::Cooldown(reason);
     }
 
+    // Pathfinder. Only in the styles where the party walks together (Natural, Lead, Companion,
+    // Custom), outdoors, and never while fighting, sneaking or riding. Returns why not, or null.
+    const char* FormationController::PathfinderRejection(RE::PlayerCharacter& player) const
+    {
+        if (!Settings::GetSingleton().Get().pathfinder.enabled) {
+            return "switched off";
+        }
+        if (!enabled) {
+            return "Walk With Me is off";
+        }
+        if (mode != FormationMode::kDynamic && mode != FormationMode::kLead && mode != FormationMode::kCompanion &&
+            mode != FormationMode::kCustom) {
+            return "not in this travel style";
+        }
+        if (sandbox.active || regroup.active || loadReleaseTime > 0) {
+            return "the party is resting, regrouping or just loaded";
+        }
+        const auto* cell = player.GetParentCell();
+        if (!cell || cell->IsInteriorCell() || !player.GetWorldspace()) {
+            return "indoors";
+        }
+        if (player.IsInCombat()) {
+            return "in combat";
+        }
+        if (player.IsSneaking()) {
+            return "sneaking";
+        }
+        if (player.IsOnMount()) {
+            return "riding";
+        }
+        return nullptr;
+    }
+
+    // A quiet Pathfinder says why in the log: at once when the kind of reason changes, and at
+    // most every 30 seconds while only its details (distances, counts) move.
+    void FormationController::NotePathfinder(std::string key, std::string detail)
+    {
+        if (key == pathfinderNoteKey && (detail == pathfinderNote || pathfinderNoteAge < 30)) {
+            return;
+        }
+        pathfinderNoteKey = std::move(key);
+        pathfinderNote = std::move(detail);
+        pathfinderNoteAge = 0;
+        if (!pathfinderNote.empty()) {
+            logger::info("[Pathfinder] waiting: {}", pathfinderNote);
+        }
+    }
+
+    // Where to run: a little past the stopping distance from the player toward the place, since
+    // the leg ends on the distance from the player. A straight line often meets a rock, a stream
+    // bank or the end of the navmesh gathered around the player, so lines either side of it are
+    // tried too, and whichever ends nearest the place wins.
+    std::optional<RE::NiPoint3> FormationController::PathfinderGround(RE::PlayerCharacter& player,
+                                                                      RE::NiPoint3 place) const
+    {
+        const auto from = player.GetPosition();
+        const Vec2 toPlace{place.x - from.x, place.y - from.y};
+        const float length = Pathfinder::RunLength(
+            Length(toPlace), Settings::GetSingleton().Get().pathfinder.run + Pathfinder::overshoot);
+        if (length < Pathfinder::minRun) {
+            return std::nullopt;
+        }
+        TravelNavigation ground; // The usual 1200-unit gathering stops short of a long run.
+        ground.Collect(player, length + 400.0F);
+        std::optional<RE::NiPoint3> best;
+        float left = std::numeric_limits<float>::infinity();
+        for (const float degrees : {0.0F, 15.0F, -15.0F, 30.0F, -30.0F}) {
+            const auto point = Pathfinder::RunPoint({from.x, from.y}, intent.Direction(), toPlace, length, degrees);
+            const auto hit = ground.Reach(from, point);
+            if (!hit || Distance2D(*hit, from) < Pathfinder::minRun) {
+                continue;
+            }
+            if (const float distance = Distance2D(*hit, place); distance < left) {
+                left = distance;
+                best = hit;
+            }
+            if (degrees == 0.0F && Length({point.x - hit->x, point.y - hit->y}) < 1.0F) {
+                break; // The straight line runs the whole way.
+            }
+        }
+        return best;
+    }
+
+    void FormationController::StartPathfinder(RE::PlayerCharacter& player)
+    {
+        const auto& tuning = Settings::GetSingleton().Get().pathfinder;
+        if (pathfinderCooldown > 0) {
+            return;
+        }
+        for (const auto& [id, f] : managed) {
+            static_cast<void>(id);
+            if (f.pathfinder.Active() || f.scout.Active()) {
+                return; // One companion away from the party at a time.
+            }
+        }
+        // The nearest undiscovered place worth pointing out. Map markers are persistent: they live
+        // in the worldspace's persistent cell, and the player keeps the current worldspace's list
+        // for the map and compass. Both are read, in case a worldspace only fills one.
+        const auto pos = player.GetPosition();
+        RE::TESObjectREFR* place = nullptr;
+        int type = 0, markers = 0, undiscovered = 0;
+        float nearest = std::numeric_limits<float>::infinity();
+        std::unordered_set<RE::FormID> checked;
+        const auto consider = [&](RE::TESObjectREFR& ref) {
+            if (!checked.insert(ref.GetFormID()).second) {
+                return;
+            }
+            auto* extra = ref.extraList.GetByType<RE::ExtraMapMarker>();
+            const auto* data = extra ? extra->mapData : nullptr;
+            const auto at = ref.GetPosition();
+            const Vec2 toPlace{at.x - pos.x, at.y - pos.y};
+            const float distance = Length(toPlace);
+            if (!data || !(distance <= tuning.range)) {
+                return;
+            }
+            ++markers;
+            const int kind = static_cast<int>(data->type.get());
+            if (ref.IsDisabled() || data->flags.all(RE::MapMarkerData::Flag::kCanTravelTo) ||
+                !Pathfinder::IsPlace(kind)) {
+                return;
+            }
+            ++undiscovered;
+            if (!pathfinderSeen.contains(ref.GetFormID()) && distance < nearest &&
+                Pathfinder::WorthPointing(intent.Direction(), toPlace, distance, tuning.range)) {
+                nearest = distance;
+                place = &ref;
+                type = kind;
+            }
+        };
+        if (auto* world = player.GetWorldspace(); world && world->persistentCell) {
+            Engine::ForEachReferenceInRange(*world->persistentCell, pos, tuning.range, [&](RE::TESObjectREFR& ref) {
+                consider(ref);
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+        }
+        if (const auto* list = Engine::CurrentMapMarkers(player); list && list->size() < 20000) {
+            for (const auto& handle : *list) {
+                if (const auto ref = handle.get()) {
+                    consider(*ref);
+                }
+            }
+        }
+        if (!place) {
+            NotePathfinder("place",
+                           undiscovered ? fmt::format("{} undiscovered place{} within {:.0f} units, none ahead of "
+                                                      "you and at least {:.0f} away",
+                                                      undiscovered, undiscovered == 1 ? "" : "s", tuning.range,
+                                                      Pathfinder::spotMin)
+                                        : fmt::format("no undiscovered place within {:.0f} units ({} map marker{} "
+                                                      "nearby)",
+                                                      tuning.range, markers, markers == 1 ? "" : "s"));
+            return;
+        }
+        const auto target = place->GetPosition();
+        const Vec2 toPlace{target.x - pos.x, target.y - pos.y};
+        const auto spotted = fmt::format("{} ({:08X}) {:.0f} units {}", Pathfinder::Noun(type), place->GetFormID(),
+                                         nearest, Pathfinder::Bearing(toPlace));
+        // Seen from a companion's eyes or the player's, at three heights: a tower or a fort wall
+        // shows over a rise that hides a cave mouth.
+        const auto sees = [&](RE::TESObjectCELL* cell, RE::NiPoint3 eye) {
+            for (const float lift : {250.0F, 700.0F, 1400.0F}) {
+                const RE::NiPoint3 aim{target.x, target.y, target.z + lift};
+                if (Pathfinder::Visible(Loot::SightFraction(cell, eye, aim), eye.GetDistance(aim))) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        auto playerEye = pos;
+        playerEye.z += 120;
+        const bool playerSees = sees(player.GetParentCell(), playerEye);
+        // Someone travelling close by: the chosen pathfinder, or anyone with a curious companion first.
+        constexpr float reach = 800.0F;
+        const auto dash = Pathfinder::RunPoint({pos.x, pos.y}, intent.Direction(), toPlace,
+                                               Pathfinder::RunLength(nearest, tuning.run));
+        ManagedFollower* chosen = nullptr;
+        RE::Actor* chosenActor = nullptr;
+        float best = std::numeric_limits<float>::infinity();
+        std::string unavailable;
+        int ready = 0;
+        for (auto& [id, f] : managed) {
+            auto actor = f.handle.get();
+            if (!actor || (!tuning.companion.empty() && HandHolding::ReferenceKey(*actor) != tuning.companion)) {
+                continue;
+            }
+            std::string reason;
+            if (!actor->Is3DLoaded()) {
+                reason = "not nearby";
+            }
+            else if (!f.travelActive) {
+                reason = "not travelling in formation";
+            }
+            else if (f.scout.Active()) {
+                reason = "scouting loot";
+            }
+            else if (HandHolding::OwnsMovement(id) || HandHolding::GetApproach().actor == id) {
+                reason = "holding hands";
+            }
+            else if (Distance2D(actor->GetPosition(), pos) > reach) {
+                reason = "too far from you";
+            }
+            else {
+                reason = UsabilityRejection(*actor, player);
+            }
+            if (!reason.empty()) {
+                if (unavailable.empty()) {
+                    unavailable = fmt::format("{}: {}", actor->GetName(), reason);
+                }
+                continue;
+            }
+            ++ready;
+            auto eye = actor->GetPosition();
+            eye.z += 120;
+            if (!playerSees && !sees(actor->GetParentCell(), eye)) {
+                continue;
+            }
+            const auto at = actor->GetPosition();
+            const float score = Length({at.x - dash.x, at.y - dash.y}) -
+                                (PersonalityFor(*actor) == Personality::Curious ? 400.0F : 0.0F);
+            if (score < best) {
+                best = score;
+                chosen = &f;
+                chosenActor = actor.get();
+            }
+        }
+        if (!chosen) {
+            // Asked again on the next scan.
+            if (ready) {
+                NotePathfinder("sight", fmt::format("{} ahead, but hidden from view", spotted));
+            }
+            else if (!unavailable.empty()) {
+                NotePathfinder("companion", fmt::format("{} ahead, but {}", spotted, unavailable));
+            }
+            else if (!tuning.companion.empty()) {
+                NotePathfinder("companion", fmt::format("{} ahead, but {} is not in the party", spotted,
+                                                        tuning.companionName));
+            }
+            else {
+                NotePathfinder("companion", fmt::format("{} ahead, but no companion is travelling with you", spotted));
+            }
+            return;
+        }
+        const auto ground = PathfinderGround(player, target);
+        if (!ground) {
+            NotePathfinder("ground", fmt::format("{} ahead, but no open ground to run to", spotted));
+            return;
+        }
+        NotePathfinder({}, {});
+        pathfinderSeen.insert(place->GetFormID());
+        pathfinderCooldown = tuning.cooldown;
+        const float toGoal = Distance2D(chosenActor->GetPosition(), *ground);
+        chosen->pathfinder.Start(toGoal, Distance2D(chosenActor->GetPosition(), target));
+        chosen->pathfinderRef = place->CreateRefHandle();
+        chosen->pathfinderPlace = target;
+        chosen->pathfinderGoal = *ground;
+        chosen->pathfinderFrom = pos;
+        chosen->pathfinderNoun = Pathfinder::Noun(type);
+        chosen->goal.Release();
+        logger::info("[Pathfinder] {} spotted {}; running {:.0f} units toward it, to {:.0f} from it ({})",
+                     chosenActor->GetName(), spotted, toGoal, Distance2D(*ground, target),
+                     playerSees ? "in plain view" : "they saw it first");
+    }
+
+    void FormationController::UpdatePathfinder(RE::PlayerCharacter& player, float dt)
+    {
+        pathfinderCooldown = std::max(0.0F, pathfinderCooldown - dt);
+        pathfinderNoteAge += dt;
+        const char* rejection = PathfinderRejection(player);
+        const bool permitted = !rejection;
+        const auto playerPos = player.GetPosition();
+        const auto& settings = Settings::GetSingleton().Get();
+        const auto& tuning = settings.pathfinder;
+        const auto rules = Pathfinder::RulesFor(tuning);
+        // Once the player discovers the place, the banner says the rest.
+        const auto discovered = [](RE::ObjectRefHandle handle) {
+            const auto ref = handle.get();
+            auto* extra = ref ? ref->extraList.GetByType<RE::ExtraMapMarker>() : nullptr;
+            return extra && extra->mapData && extra->mapData->flags.all(RE::MapMarkerData::Flag::kCanTravelTo);
+        };
+        for (auto& [id, f] : managed) {
+            if (!f.pathfinder.Active()) {
+                continue;
+            }
+            auto actor = f.handle.get();
+            if (!actor || !permitted || f.scout.Active() || HandHolding::OwnsMovement(id) ||
+                HandHolding::GetApproach().actor == id || !UsabilityRejection(*actor, player).empty()) {
+                EndPathfinder(f, actor.get(), Pathfinder::End::Interrupted);
+                continue;
+            }
+            if (discovered(f.pathfinderRef)) {
+                EndPathfinder(f, actor.get(), Pathfinder::End::Found);
+                continue;
+            }
+            const auto pos = actor->GetPosition();
+            const bool dashing = f.pathfinder.phase == Pathfinder::Phase::Dash;
+            if (dashing && Distance2D(playerPos, f.pathfinderFrom) > Pathfinder::retargetDistance) {
+                // The player walked on: the running point stays the same distance out from them.
+                f.pathfinderFrom = playerPos;
+                if (const auto ground = PathfinderGround(player, f.pathfinderPlace)) {
+                    f.pathfinderGoal = *ground;
+                    f.pathfinder.Retarget(Distance2D(pos, *ground));
+                }
+            }
+            // Turn to the place to point it out; otherwise to the player, to wave them on and watch
+            // them come.
+            const bool facing =
+                !dashing && Loot::Face(*actor, f.pathfinder.phase == Pathfinder::Phase::Point ? f.pathfinderPlace
+                                                                                            : playerPos,
+                                       dt);
+            const Pathfinder::Sense sense{Distance2D(pos, f.pathfinderGoal), Distance2D(pos, playerPos),
+                                          Distance2D(pos, f.pathfinderPlace),
+                                          Distance2D(playerPos, f.pathfinderPlace), facing};
+            Pathfinder::Cue cue;
+            auto end = f.pathfinder.Tick(dt, sense, rules, cue);
+            if (dashing && f.pathfinder.phase != Pathfinder::Phase::Dash) {
+                const char* why = sense.toGoal <= Pathfinder::arrival ? "arrived"
+                                  : sense.fromPlayer >= rules.stopAt - Pathfinder::farEnough
+                                      ? "far enough ahead"
+                                  : f.pathfinder.stalled >= Pathfinder::stallSeconds ? "no longer gaining ground"
+                                                                                     : "out of time";
+                logger::info("[Pathfinder] {} stops {:.0f} units from you and {:.0f} from it after {:.1f}s ({}{})",
+                             actor->GetName(), sense.fromPlayer, sense.toPlace, f.pathfinder.elapsed, why,
+                             f.pathfinder.last && tuning.lead ? "; the last stop" : "");
+                f.pathfinderGoal = pos; // Stop here for the wave and the point.
+            }
+            if (cue.leadOn) {
+                // The player came close: on toward the place, the same distance out from them again,
+                // unless that would gain nothing.
+                f.pathfinderFrom = playerPos;
+                const auto ground = PathfinderGround(player, f.pathfinderPlace);
+                const float gain = ground ? sense.toPlace - Distance2D(*ground, f.pathfinderPlace) : 0.0F;
+                if (ground && gain >= Pathfinder::minLeg) {
+                    f.pathfinderGoal = *ground;
+                    f.pathfinder.Lead(Distance2D(pos, *ground), sense.toPlace);
+                    logger::info("[Pathfinder] {} leads on, {:.0f} units closer to it", actor->GetName(), gain);
+                }
+                else {
+                    f.pathfinder.Close();
+                    logger::info("[Pathfinder] {} can get no closer ({:.0f} units from it)", actor->GetName(),
+                                 sense.toPlace);
+                }
+            }
+            if (cue.wave || cue.point) {
+                constexpr RE::FormID idleWave = 0x3EA32, idlePointFar[]{0xB8F1E, 0xB8F1F};
+                const bool played =
+                    Loot::PlayGesture(*actor, cue.wave ? idleWave : idlePointFar[RestPose::Mix(id) % 2]);
+                // Named once, when first pointed out; the point on arrival needs no words.
+                if (cue.point && !f.pathfinder.closing && tuning.notice) {
+                    const Vec2 toPlace{f.pathfinderPlace.x - playerPos.x, f.pathfinderPlace.y - playerPos.y};
+                    Notify(fmt::format("{} points out {} to the {}.", actor->GetName(), f.pathfinderNoun,
+                                       Pathfinder::Bearing(toPlace)));
+                }
+                logger::info("[Pathfinder] {} {} ({})", actor->GetName(),
+                             cue.point                                          ? "points"
+                             : f.pathfinder.phase == Pathfinder::Phase::Wait    ? "waves you on again"
+                                                                                : "waves",
+                             played ? "idle accepted" : "idle refused");
+            }
+            if (end == Pathfinder::End::None) {
+                // Borrow the slot's own travel package, as loot scouting does: its marker runs ahead.
+                auto* quest = EnsureQuest();
+                auto* package = quest && quest->IsRunning()
+                                    ? RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESPackage>(
+                                          PackageLocal(f.slot), settings.pluginName)
+                                    : nullptr;
+                auto* marker = package ? EnsureMarker(f, player) : nullptr;
+                if (!marker) {
+                    end = Pathfinder::End::Interrupted;
+                }
+                else {
+                    bool retarget = false;
+                    if (marker->GetPosition().GetDistance(f.pathfinderGoal) > 8) {
+                        if (marker->GetParentCell() != player.GetParentCell()) {
+                            marker->MoveTo(&player);
+                        }
+                        marker->SetPosition(f.pathfinderGoal);
+                        retarget = true;
+                    }
+                    const bool run = f.pathfinder.phase == Pathfinder::Phase::Dash;
+                    package->packData.packFlags.set(RE::PACKAGE_DATA::GeneralFlag::kPreferredSpeed);
+                    package->packData.maxSpeed =
+                        static_cast<RE::PACKAGE_DATA::PreferredSpeed>(run ? TravelPace::kRun : TravelPace::kWalk);
+                    f.speedScale = SmoothSpeedScale(f.speedScale, run ? 1.35F : 1.0F, dt);
+                    TravelSpeed::Set(static_cast<std::uint32_t>(f.slot), actor->GetFormID(), f.speedScale);
+                    f.travelActive = true;
+                    if (retarget && actor->GetCurrentPackage() == package) {
+                        actor->EvaluatePackage(false, true);
+                    }
+                }
+            }
+            if (end != Pathfinder::End::None) {
+                EndPathfinder(f, actor.get(), end);
+            }
+        }
+        pathfinderScan += dt;
+        if (intent.IsMoving() && pathfinderScan >= Pathfinder::scanSeconds) {
+            pathfinderScan = 0;
+            if (permitted) {
+                StartPathfinder(player);
+            }
+            else {
+                NotePathfinder(rejection, rejection);
+            }
+        }
+    }
+
+    void FormationController::EndPathfinder(ManagedFollower& f, RE::Actor* actor, Pathfinder::End reason)
+    {
+        if (!f.pathfinder.Active()) {
+            return;
+        }
+        logger::info("[Pathfinder] {} rejoins after {:.1f}s and {} stop{}: {}", actor ? actor->GetName() : "Companion",
+                     f.pathfinder.elapsed, f.pathfinder.stops, f.pathfinder.stops == 1 ? "" : "s",
+                     Pathfinder::EndName(reason));
+        f.pathfinder.Stop();
+        f.pathfinderRef = {};
+        f.goal.Release(); // Travel recommits to their place in the formation.
+        // A trip can outlast the cooldown; the next sighting waits a full one from here.
+        pathfinderCooldown = std::max(pathfinderCooldown, Settings::GetSingleton().Get().pathfinder.cooldown);
+    }
+
+    bool FormationController::HasPathfinder() const
+    {
+        return std::any_of(managed.begin(), managed.end(),
+                           [](const auto& entry) { return entry.second.pathfinder.Active(); });
+    }
+
     std::vector<FormationController::LootScoutView> FormationController::LootScouts() const
     {
         std::lock_guard lock(stateMutex);
@@ -5635,6 +6509,20 @@ namespace Wayfarer
         for (const auto& [id, f] : managed) {
             if (f.scout.Active() && !explicitExclusions.contains(id)) {
                 result.push_back({f.handle, f.scout.valuable, f.scout.elapsed});
+            }
+        }
+        return result;
+    }
+
+    std::vector<FormationController::LootScoutView> FormationController::Pathfinders() const
+    {
+        std::lock_guard lock(stateMutex);
+        std::vector<LootScoutView> result;
+        for (const auto& [id, f] : managed) {
+            // The trip ends as soon as the last point is held, or the moment it is called off, so
+            // the emblem goes with it.
+            if (f.pathfinder.Active() && !explicitExclusions.contains(id)) {
+                result.push_back({f.handle, false, f.pathfinder.elapsed});
             }
         }
         return result;
@@ -5727,11 +6615,15 @@ namespace Wayfarer
             row.canPush = row.pushReason.empty();
             if (row.controlled) {
                 const auto status = actor ? UsabilityRejection(*actor, *player) : "NPC is not loaded";
+                const char* lost = actor ? PackageControlLoss(*actor, registration->second) : nullptr;
                 row.state = !enabled                          ? "Control paused: Walk With Me is disabled"
                             : mode == FormationMode::kVanilla ? "Control paused: Vanilla mode"
-                            : !status.empty()                 ? "Control paused: " + status
-                            : !managed.contains(id)           ? "Waiting for a free party slot"
-                                                              : "Walk With Me controls travel and rest";
+                            : PackageControlSuspended(id)
+                                ? fmt::format("Paused until they follow you again{}",
+                                              lost ? fmt::format(" ({})", lost) : std::string{})
+                            : !status.empty()       ? "Control paused: " + status
+                            : !managed.contains(id) ? "Waiting for a free party slot"
+                                                    : "Walk With Me controls travel and rest";
             }
             else {
                 row.state = why ? why : "Ready for explicit travel control";
@@ -5759,8 +6651,10 @@ namespace Wayfarer
                 const bool nff = IsNFFFollower(actor);
                 const auto id = actor.GetFormID();
                 const bool eligible = IsDialogueFollower(actor);
-                if (!eligible && !dialogueRegistrations.contains(id) && !manualRegistrations.contains(id) &&
-                    !packageRegistrations.contains(id)) {
+                // A teammate from a framework Walk With Me cannot read is listed too, so it can be added.
+                const bool teammate = actor.IsPlayerTeammate() && !actor.IsHostileToActor(player);
+                if (!eligible && !teammate && !dialogueRegistrations.contains(id) &&
+                    !manualRegistrations.contains(id) && !packageRegistrations.contains(id)) {
                     return RE::BSContainer::ForEachResult::kContinue;
                 }
                 CompanionView row;
@@ -5783,8 +6677,19 @@ namespace Wayfarer
                 row.apiRegistered = manualRegistrations.contains(id);
                 row.packageControlled = packageRegistrations.contains(id);
                 row.eligible = eligible;
-                if (row.excluded || mode == FormationMode::kVanilla) {
+                row.teammate = teammate;
+                const bool added = row.manuallyAdded || row.apiRegistered || row.packageControlled;
+                if (row.excluded) {
                     row.state = "Left to follower AI";
+                }
+                else if (!enabled || mode == FormationMode::kVanilla) {
+                    row.state = added ? "Added - joins when a travel style is chosen" : "Left to follower AI";
+                }
+                else if (row.packageControlled && PackageControlSuspended(id)) {
+                    row.state = "Added - paused until they follow you again";
+                }
+                else if (!eligible && !added) {
+                    row.state = "Following you - not added";
                 }
                 else if (row.manuallyAdded && !eligible) {
                     row.state = "Added - not currently following";
@@ -5844,6 +6749,8 @@ namespace Wayfarer
             c.explicitExclusions.clear();
             c.dialogueRegistrations.clear();
             c.packageRegistrations.clear();
+            c.packageLossSince.clear();
+            c.packageSeenFollowing.clear();
             c.restoredRelax = false;
             c.restoredRelaxSlots.clear();
             c.restoredVanilla = false;
@@ -5907,6 +6814,8 @@ namespace Wayfarer
             c.explicitExclusions.clear();
             c.dialogueRegistrations.clear();
             c.packageRegistrations.clear();
+            c.packageLossSince.clear();
+            c.packageSeenFollowing.clear();
             c.restoredRelax = false;
             c.restoredRelaxSlots.clear();
             c.restoredVanilla = false;

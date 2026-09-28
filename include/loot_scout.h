@@ -27,6 +27,7 @@ namespace Wayfarer::Loot
         bool valuable{};
         float alpha{1};
         std::uint32_t actor{};
+        bool pathfinder{}; // The pathfinder emblem rather than the loot chest.
     };
 
     void Install();
@@ -38,6 +39,10 @@ namespace Wayfarer::Loot
     [[nodiscard]] RE::NiPoint3 Center(RE::TESObjectREFR& ref);
     // Line of sight from the follower's eyes; only the target's own collision may stop the ray.
     [[nodiscard]] bool Sees(RE::Actor& actor, RE::TESObjectREFR& ref, RE::NiPoint3 center);
+    // How far along the line-of-sight ray from `from` to `to` the first obstacle lies (1: none).
+    [[nodiscard]] float SightFraction(RE::TESObjectCELL* cell, RE::NiPoint3 from, RE::NiPoint3 to);
+    // Plays a one-shot idle (a wave, a point) through the actor's own process.
+    bool PlayGesture(RE::Actor& actor, RE::FormID idle);
     // Nothing between the follower's hands and the find, checked once they arrive.
     [[nodiscard]] bool Reaches(RE::Actor& actor, RE::TESObjectREFR& ref, RE::NiPoint3 center);
     // Finds a standing spot beside the find on the follower's connected navmesh (`area`, explored

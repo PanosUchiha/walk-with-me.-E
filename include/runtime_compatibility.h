@@ -5,9 +5,20 @@
 namespace Wayfarer::RuntimeCompatibility
 {
     using Version = std::array<std::uint16_t, 4>;
+
+    // SKSE reports the store in the last field (0 Steam, 1 GOG). GOG 1.6.1170 shares Steam's
+    // number and would load Steam's Address Library, so only GOG's own 659 and 1179 pass.
+    constexpr std::uint16_t GOG = 1;
+
     constexpr bool Supports(Version version, bool modernLibrary)
     {
-        if (version[0] != 1 || version[3] != 0) {
+        if (version[0] != 1) {
+            return false;
+        }
+        if (version[3] == GOG) {
+            return version[1] == 6 && (version[2] == 659 || version[2] == 1179);
+        }
+        if (version[3] != 0) {
             return false;
         }
         if (version[1] == 5) {

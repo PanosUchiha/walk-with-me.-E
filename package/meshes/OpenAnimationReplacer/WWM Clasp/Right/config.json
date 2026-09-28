@@ -1,0 +1,13 @@
+{
+  "name": "R hand clasp",
+  "description": "Authored clasp arm while this actor owns a WWM TETHER grip.",
+  "priority": 27103000,
+  "interruptible": true,
+  "conditions": [
+    {
+      "condition": "WWM_TetherClaspR",
+      "requiredVersion": "0.2.0.0",
+      "requiredPlugin": "Walk With Me"
+    }
+  ]
+}

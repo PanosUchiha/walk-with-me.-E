@@ -27,8 +27,15 @@ namespace Wayfarer
         // Speed-factor call in Actor::SetMaximumMovementSpeed. The engine consumes the
         // adjusted factor through its normal locomotion pipeline; actor values are untouched.
         // Call-site reference: https://github.com/Kei-BWV997/TETHER/blob/main/src/SpeedHook.cpp
+        // The call must still go to GetScale. A target outside the game's code is another
+        // plugin's hook on the same call, which chains safely.
         REL::Relocation<std::uintptr_t> site{RELOCATION_ID(37013, 37943), REL::Relocate(0x1A, 0x51)};
-        if (*reinterpret_cast<const std::uint8_t*>(site.address()) != 0xE8) {
+        REL::Relocation<std::uintptr_t> getScale{RELOCATION_ID(19238, 19664)};
+        const auto target = site.address() + 5 + *reinterpret_cast<const std::int32_t*>(site.address() + 1);
+        const auto text = REL::Module::get().segment(REL::Segment::textx);
+        const bool gameCode = target >= text.address() && target < text.address() + text.size();
+        if (*reinterpret_cast<const std::uint8_t*>(site.address()) != 0xE8 ||
+            (gameCode && target != getScale.address())) {
             logger::error("[Speed] Unexpected hook instruction; retaining native gait speeds");
             return;
         }

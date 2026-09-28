@@ -20,6 +20,9 @@ ObjectReference Function GetRestSeat(Int aiSlot) Global Native
 Actor Function GetSocialTarget(Int aiSlot) Global Native
 Bool Function HasSocialGroup() Global Native
 Bool Function ShouldSuspendForDialogue() Global Native
+Bool Function AliasSyncAllowed(Int ticket, Int session) Global Native
+Function ReportAliasLook(Int slot, Actor actor, Actor target, Int ticket, Int session) Global Native
+Function ReportAliasCleanup(Int slot, Bool pending, Int ticket, Int session) Global Native
 Function ReportAliasSync(Bool abBusy) Global Native
 Function ReportSocialIdle(Actor akActor, Bool abAccepted) Global Native
 Idle Function ConsumeSocialIdle(Int aiSlot) Global Native

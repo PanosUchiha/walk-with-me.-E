@@ -59,6 +59,38 @@ namespace Wayfarer
         return result;
     }
 
+    std::vector<int> RoleDebounce::Update(std::span<const int> current, std::span<const int> proposed,
+                                          float elapsed, float hold)
+    {
+        if (proposed.empty() || proposed.size() != current.size() ||
+            std::equal(current.begin(), current.end(), proposed.begin(), proposed.end())) {
+            Reset();
+            return {};
+        }
+        unsigned seen = 0;
+        bool placed = current.size() <= 10;
+        for (int role : current) {
+            if (!placed || role < 0 || role >= static_cast<int>(current.size()) || (seen & (1U << role))) {
+                placed = false;
+                break;
+            }
+            seen |= 1U << role;
+        }
+        if (placed && !std::equal(pending.begin(), pending.end(), proposed.begin(), proposed.end())) {
+            pending.assign(proposed.begin(), proposed.end());
+            age = 0;
+            return {};
+        }
+        if (placed) {
+            age += std::isfinite(elapsed) ? std::clamp(elapsed, 0.0F, 1.0F) : 0.0F;
+            if (age + 1e-4F < hold) {
+                return {};
+            }
+        }
+        Reset();
+        return {proposed.begin(), proposed.end()};
+    }
+
     FormationSlot BlendRoleOffset(FormationSlot current, FormationSlot target, float dt)
     {
         dt = std::clamp(dt, 0.0F, 0.5F);

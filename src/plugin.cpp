@@ -71,6 +71,7 @@ namespace
             Wayfarer::CommandGesture::Update(a_delta);
             Wayfarer::FormationController::GetSingleton().Update(a_delta);
             Wayfarer::FormationController::GetSingleton().UpdateHandHolding(a_delta);
+            Wayfarer::FormationController::GetSingleton().UpdateAliasSync(a_delta);
             Wayfarer::Menu::Publish();
             Wayfarer::RestDialogue::Update(a_delta);
             Wayfarer::Loot::Update(a_delta);
@@ -85,6 +86,20 @@ namespace
 
         static inline REL::Relocation<decltype(Thunk)> Func;
     };
+
+    // NFF's menu lives in the journal, and shows its catch-up timer there: hand it back the
+    // player's own value while the journal is open.
+    struct JournalWatch final : RE::BSTEventSink<RE::MenuOpenCloseEvent>
+    {
+        RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* event,
+                                              RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+        {
+            if (event && event->opening && event->menuName == RE::JournalMenu::MENU_NAME) {
+                Wayfarer::FormationController::GetSingleton().ReleaseFrameworkCatchup("while the journal is open");
+            }
+            return RE::BSEventNotifyControl::kContinue;
+        }
+    } journalWatch;
 
     void OnMessage(SKSE::MessagingInterface::Message* a_message)
     {
@@ -103,6 +118,14 @@ namespace
             PlayerUpdateHook::Install();
             Wayfarer::HandHolding::Install();
             Wayfarer::Loot::Install();
+            if (auto* ui = RE::UI::GetSingleton()) {
+                ui->AddEventSink<RE::MenuOpenCloseEvent>(&journalWatch);
+            }
+            break;
+        case SKSE::MessagingInterface::kSaveGame:
+            // Sent before the game writes the save, so the save keeps the player's NFF settings
+            // (and they survive uninstalling Walk With Me).
+            Wayfarer::FormationController::GetSingleton().ReleaseFrameworkCatchup("for the save");
             break;
         case SKSE::MessagingInterface::kPreLoadGame:
             Wayfarer::FormationController::GetSingleton().ResetForGameLoad();
@@ -113,6 +136,7 @@ namespace
         case SKSE::MessagingInterface::kNewGame:
             Wayfarer::HandHolding::OnGameLoaded();
             Wayfarer::FormationController::GetSingleton().ResetForGameLoad();
+            Wayfarer::FormationController::GetSingleton().RestartFrameworkCatchupAfterLoad();
             Wayfarer::Menu::Reset();
             break;
         default:
@@ -141,7 +165,9 @@ __declspec(dllexport) bool __cdecl SKSEPlugin_Load(const SKSE::LoadInterface* a_
     if (!Wayfarer::RuntimeCompatibility::Supports({runtime[0], runtime[1], runtime[2], runtime[3]},
                                                   modernLibrary)) {
         const auto message = "Walk With Me: this DLL does not support Skyrim " + runtime.string() +
-                             ". Install the Walk With Me build matching your game runtime.";
+                             (runtime[3] == Wayfarer::RuntimeCompatibility::GOG
+                                  ? ". On GOG, update the game to 1.6.1179."
+                                  : ". Install the Walk With Me build matching your game runtime.");
         MessageBoxA(nullptr, message.c_str(), "Walk With Me", MB_OK | MB_ICONERROR);
         return false;
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "custom_formation.h"
 #include "formation_math.h"
 #include <array>
 #include <cstdint>
@@ -95,6 +96,9 @@ namespace Wayfarer
     };
 
     [[nodiscard]] FormationSlot FormationPosition(FormationMode a_mode, int a_slot);
+    // The formation used by FormationMode::kCustom; the controller sets it from the settings.
+    void SetCustomFormation(const Custom::Formation& formation);
+    [[nodiscard]] const Custom::Formation& CustomFormation();
     [[nodiscard]] FormationSlot NaturalPosition(FormationMode mode, int slot, std::uint32_t actorID);
 
     struct TravelRole

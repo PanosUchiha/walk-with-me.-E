@@ -13,7 +13,8 @@ namespace WayfarerAPI
         kCompanion = 2,
         kRear = 3,
         kSandbox = 4,
-        kVanilla = 5
+        kVanilla = 5,
+        kCustom = 6 // Ignored until the player has saved a custom formation.
     };
 
     class IWayfarer

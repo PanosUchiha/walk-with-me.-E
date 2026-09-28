@@ -57,11 +57,22 @@ python -X utf8 tools/package-release.py --vcpkg-root C:/vcpkg
 ```
 
 Keep vcpkg's `buildtrees/*/src/*.clean` folders for source packaging.
-The public packager includes the local clasp generator and its GPL-licensed
-PyNifly codec source. It rejects game-derived clasp clips and checks every
-bundled original animation against `assets/release-animation-hashes.json`.
-See hand-holding.md to generate the optional clips from a user's own game files;
-keep that generated ZIP separate from public downloads.
+The main archive ships the 68 hand-clasp clips staged under
+`package/meshes/OpenAnimationReplacer/WWM Clasp`. The packager checks every
+animation it ships against `assets/release-animation-hashes.json`. It refuses to
+package without all 68 clips and both OAR configs.
+
+To rebuild the clips after changing `assets/clasp-rotations.json`, extract
+`meshes/actors/character/animations/male` and `female` from a vanilla
+`Skyrim - Animations.bsa`, not from animation replacers, then run:
+
+```powershell
+py -3 tools/build-tether-clasp-clips.py --animations "C:/Extracted/meshes/actors/character/animations" --output build/clasp-rebuild
+```
+
+Copy its `meshes` folder over `package/meshes`. Then replace the 68 `WWM Clasp`
+hashes in `assets/release-animation-hashes.json` with those from its
+`validation.json`. The generator and PyNifly codec stay in the source download.
 
 The public packager writes the base SE/AE ZIP, optional Command Gestures ZIP and
 matching complete Source ZIP, each with a checksum. The source archive preserves

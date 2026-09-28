@@ -34,6 +34,9 @@ namespace Wayfarer::HandHolding
         // Do not resume an ordinary formation route during physics setup.
         bool holdPosition{};
         IK::Point position{};
+        // Keep the existing WWM route moving until the serialized alias cleanup
+        // finishes. This never permits refilling the alias or starting offset early.
+        bool handoffTravel{};
     };
     Approach GetApproach();
 } // namespace Wayfarer::HandHolding

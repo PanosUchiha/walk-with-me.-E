@@ -1,6 +1,8 @@
+#include "action_grid.h"
 #include "follower_catchup.h"
 #include "order_wheel.h"
 #include "party_recall.h"
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -149,5 +151,116 @@ int main()
     a.Update(.016F, 1);
     Check(Wheel::Difference(a.angle, Wheel::Angle(0)) < .4F,
           "indicator takes the short path across angle wrap");
+    // The party actions grid.
+    for (auto screen : {std::pair{1280.0F, 720.0F}, std::pair{1920.0F, 1080.0F}, std::pair{3440.0F, 1440.0F},
+                        std::pair{3840.0F, 2160.0F}}) {
+        const float w = Wheel::Width(screen.first, screen.second);
+        for (int i = 0; i < ActionGrid::count; ++i) {
+            const auto a = ActionGrid::TileBox(i, w);
+            Check(a.x > 0 && a.x + a.w < w && a.y > ActionGrid::BackBar(w).y + ActionGrid::BackBar(w).h &&
+                      a.y + a.h < w * .99F,
+                  "tiles sit inside the window, under the back bar and above the detail line");
+            for (int j = i + 1; j < ActionGrid::count; ++j) {
+                const auto b = ActionGrid::TileBox(j, w);
+                Check(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y,
+                      "tiles never overlap");
+            }
+        }
+        const auto more = ActionGrid::MoreBar(w);
+        Check(more.y > w * (.48F + .41F) && more.y + more.h < w * 1.2F,
+              "the down bar sits between the wheel and the hints");
+    }
+    Check(ActionGrid::Move(0, 0, -1) == -1 && ActionGrid::Move(2, 0, -1) == -1,
+          "up from the top row goes back to the wheel");
+    // Four party actions on top; the three roles below, centred between them.
+    Check(ActionGrid::Move(0, 0, 1) == 4 && ActionGrid::Move(1, 0, 1) == 4 && ActionGrid::Move(2, 0, 1) == 5 &&
+              ActionGrid::Move(3, 0, 1) == 6,
+          "down goes to the nearest role, the left one on a tie");
+    Check(ActionGrid::Move(4, 0, -1) == 0 && ActionGrid::Move(5, 0, -1) == 1 && ActionGrid::Move(6, 0, -1) == 2,
+          "up goes to the nearest party action");
+    Check(ActionGrid::Move(0, -1, 0) == 0 && ActionGrid::Move(3, 1, 0) == 3 && ActionGrid::Move(6, 1, 0) == 6 &&
+              ActionGrid::Move(4, -1, 0) == 4 && ActionGrid::Move(5, 0, 1) == 5,
+          "edges stop instead of wrapping");
+    Check(ActionGrid::Move(4, 1, 0) == 5 && ActionGrid::Move(5, -1, 0) == 4 && ActionGrid::Move(1, 1, 0) == 2,
+          "left and right move along a row");
+    for (int i = 0; i < 3; ++i) {
+        const auto top = ActionGrid::TileBox(i, 1), below = ActionGrid::TileBox(4 + i, 1);
+        Check(std::abs(below.x - (top.x + top.w * .5F + .013F)) < .02F, "the roles row sits centred between");
+    }
+    std::array<float, 3> settled{};
+    constexpr std::array<float, 3> rates{30, 60, 144};
+    for (int r = 0; r < 3; ++r) {
+        ActionGrid::Motion g;
+        const std::array<bool, ActionGrid::count> on{false, true, false, true, false, true, true};
+        g.Reset(0, false, on);
+        for (int i = 0; i < static_cast<int>(rates[r] * .5F); ++i) {
+            g.Update(1 / rates[r], true, 4, on);
+        }
+        settled[r] = g.page;
+        Check(g.page > .99F && g.Reveal(ActionGrid::count - 1) > .99F, "the grid is fully in within half a second");
+        Check(std::abs(g.frameX - ActionGrid::TileBox(4, 1).x) < .005F &&
+                  std::abs(g.frameY - ActionGrid::TileBox(4, 1).y) < .005F,
+              "the selection frame reaches the focused tile");
+        Check(g.toggle[1] == 1 && g.toggle[4] == 0, "switches start in their saved position");
+        g.Update(1 / rates[r], false, 4, on);
+        Check(g.Reveal(0) > .99F && g.page < 1, "leaving keeps the tiles up while they fade with the page");
+        for (int i = 0; i < static_cast<int>(rates[r] * .5F); ++i) {
+            g.Update(1 / rates[r], false, 4, on);
+        }
+        Check(g.page < .01F, "and the wheel returns within half a second");
+        g.Update(1 / rates[r], true, 4, on);
+        Check(g.Reveal(0) < .1F, "returning to the grid replays the reveal");
+    }
+    Check(std::abs(settled[0] - settled[2]) < .01F, "page motion does not depend on frame rate");
+
+    // The right stick on the grid.
+    {
+        ActionGrid::StickSteps s;
+        auto steps = [&](float x, float y, float seconds) {
+            std::array<int, 2> total{};
+            for (float t = 0; t < seconds; t += 1.0F / 60) {
+                const auto step = s.Update(x, y, 1.0F / 60);
+                total[0] += step[0];
+                total[1] += step[1];
+            }
+            return total;
+        };
+        Check(steps(.3F, 0, .5F) == std::array<int, 2>{0, 0}, "a light touch does not move");
+        Check(steps(.9F, .1F, .2F) == std::array<int, 2>{1, 0}, "a firm push right moves one tile");
+        Check(steps(.9F, .1F, .2F) == std::array<int, 2>{0, 0}, "holding briefly does not repeat");
+        Check(steps(.9F, .1F, .5F)[0] >= 2, "holding longer repeats");
+        steps(0, 0, .1F);
+        Check(steps(0, -.8F, .1F) == std::array<int, 2>{0, -1}, "up is negative y, as on screen");
+        s.Lock();
+        Check(steps(0, .9F, .5F) == std::array<int, 2>{0, 0}, "after a page change a held stick is ignored");
+        steps(0, 0, .1F);
+        Check(steps(0, .9F, .1F) == std::array<int, 2>{0, 1}, "until it has been released");
+    }
+
+    // Taking over Nether's Follower Framework's catch-up.
+    Check(OwnsFrameworkCatchup(true, true, true, true, true, false), "teleporting takes over NFF's catch-up");
+    Check(OwnsFrameworkCatchup(true, true, true, true, false, true),
+          "a held Relax camp takes over NFF's catch-up even with teleporting off");
+    Check(!OwnsFrameworkCatchup(true, false, true, true, true, true), "NFF's catch-up switched off: hands off");
+    Check(!OwnsFrameworkCatchup(true, true, false, true, true, true), "the player can forbid the takeover");
+    Check(!OwnsFrameworkCatchup(true, true, true, false, true, true), "Vanilla or disabled gives it back");
+    Check(!OwnsFrameworkCatchup(false, true, true, true, true, true), "no NFF, nothing to take over");
+    Check(!OwnsFrameworkCatchup(true, true, true, true, false, false), "nothing to do, nothing taken");
+    FrameworkWarpPark park;
+    Check(park.Update(true, 8) == FrameworkWarpPark::parked && park.saved == 8, "parks and remembers 8 s");
+    Check(std::isnan(park.Update(true, FrameworkWarpPark::parked)), "an existing park is left alone");
+    Check(park.Release(FrameworkWarpPark::parked) == 8, "a save sees the player's own interval");
+    Check(park.Update(true, 8) == FrameworkWarpPark::parked, "and it is parked again after the save");
+    Check(park.Release(FrameworkWarpPark::parked) == 8, "the journal shows the player's interval");
+    Check(park.Update(true, 12) == FrameworkWarpPark::parked && park.saved == 12,
+          "a change made in NFF's menu is kept");
+    Check(park.Update(false, FrameworkWarpPark::parked) == 12, "handing back restores the player's value");
+    Check(std::isnan(park.Update(false, 12)), "nothing to restore twice");
+    FrameworkWarpPark fresh;
+    Check(fresh.Update(false, FrameworkWarpPark::parked) == FrameworkWarpPark::fallback,
+          "a stray park from an earlier session is cleared to NFF's default");
+    Check(std::isnan(fresh.Update(true, std::numeric_limits<float>::quiet_NaN())),
+          "an unreadable value is never overwritten");
+    Check(std::isnan(fresh.Release(8)), "releasing an unparked timer writes nothing");
     std::cout << "Catch-up timing and wheel motion checks passed\n";
 }

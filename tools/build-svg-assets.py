@@ -11,6 +11,10 @@ def write(name,path):
     ET.fromstring(text)
     (target/(name+'.svg')).write_text(text,encoding='utf-8')
 write('natural',data('footsteps'));write('shield',data('shield'));write('loot',data('locked-chest'))
+write('pathfinder',data('compass'))
+# Custom formation emblems, chosen in Travel settings (Custom::emblems order).
+for key in ('band','banner','crown','castle','swords','dragon','wolf','raven','stag','steed','pine','rune','watch','moon','calm','tavern'):
+    write('crest-'+key,data('crest-'+key))
 parts=re.split(r'(?=M)',data('arrow'))[1:]
 assert len(parts)==3
 for name,path in zip(('arrow','wing-a','wing-b'),parts):write(name,path)
@@ -19,9 +23,11 @@ ember,logs=tail.split('zm74.47',1)
 write('flame',flame);write('ember','M173.876'+ember+'z')
 write('logs','M248.346 317.218'+logs.split('269.094',1)[1])
 def point(angle,r):return f'{256+r*math.cos(angle):.3f} {256+r*math.sin(angle):.3f}'
+SECTORS=7 # Order wheel wedges: the six orders plus Custom. Must match Wheel::count.
 def sector(inset):
     inner,outer=240*.51+inset,240-inset
-    start,end=math.radians(-119)+inset/180,math.radians(-61)-inset/180
+    half=180/SECTORS-1 # One degree of gap on each side, as the six-way wedge had.
+    start,end=math.radians(-90-half)+inset/180,math.radians(-90+half)-inset/180
     corner=7
     return (f'M{point(start+corner/inner,inner)} '
         f'A{inner:.3f} {inner:.3f} 0 0 1 {point(end-corner/inner,inner)} '

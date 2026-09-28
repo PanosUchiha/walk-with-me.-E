@@ -47,13 +47,15 @@ namespace Wayfarer
                    ? std::max(currentRadius, std::min(tuning.settledActivityRadius, tuning.maxRadius))
                    : currentRadius;
     }
+    // Not in dungeons, and not out in a town's streets. The controller narrows this further by
+    // place (see MealPlace in area_activities.h).
     inline bool MealsAllowed(RestContext context, const SandboxTuning& tuning)
     {
-        return tuning.meals && context != RestContext::Dungeon;
+        return tuning.meals && context != RestContext::Dungeon && context != RestContext::Settlement;
     }
     inline bool SettledRefreshments(RestContext context, const SandboxTuning& tuning)
     {
-        return SettledRest(context) && tuning.meals;
+        return (context == RestContext::Tavern || context == RestContext::Interior) && tuning.meals;
     }
     inline RestActivity ChooseRefreshment(RestContext context, std::uint32_t roll)
     {

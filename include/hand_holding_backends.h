@@ -12,6 +12,10 @@ namespace Wayfarer::HandHolding::Classic
                        const TravelNavigation& navigation);
     bool IsAttached(RE::FormID actor);
     Approach GetApproach();
+    bool OwnsMovement(RE::FormID actor);
+    std::int32_t HandoffTicket(RE::FormID actor);
+    bool HandoffCleanupFinished(RE::FormID actor, std::int32_t ticket);
+    void ConfirmHandoff(RE::FormID actor, std::int32_t ticket, bool aliasEmpty, bool packageReleased);
 } // namespace Wayfarer::HandHolding::Classic
 
 namespace Wayfarer::HandHolding::Tether

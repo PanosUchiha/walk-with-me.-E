@@ -26,6 +26,21 @@ namespace Wayfarer::HandHolding
         return !route.hasRoute ||
                Length({route.submittedGoal.x - target.x, route.submittedGoal.y - target.y}) > .5F;
     }
+    inline bool ContinueHandoffTravel(bool requested, bool travelActive, bool aliasAssigned,
+                                      bool packageActive)
+    {
+        // A pending handoff may update an existing route, never take a package
+        // back from the script or another mod after it has been released.
+        return requested && travelActive && aliasAssigned && packageActive;
+    }
+    inline bool RepathHandoffTravel(const TravelGoalState& route, Vec2 target)
+    {
+        // Resume promptly from the captured arrival stop. Keep a minimum cadence
+        // so following a moving player cannot restart pathfinding every frame.
+        return route.active && route.recoveryTime <= 0 && route.sinceRepath >= .15F &&
+               (!route.hasRoute ||
+                Length({route.submittedGoal.x - target.x, route.submittedGoal.y - target.y}) >= 8);
+    }
     // Each WWM slot has its own package. Restore the value we borrowed, including
     // on dialogue, combat, failed navigation, handoff and load/reset.
     struct ArrivalRadiusLease
