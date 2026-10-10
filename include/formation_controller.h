@@ -330,6 +330,9 @@ namespace Wayfarer
                                                      bool inspectBanterScene = false,
                                                      bool allowDrawnWeapon = false) const;
         [[nodiscard]] const char* GlobalRejection(RE::PlayerCharacter& a_player) const;
+        // Someone hostile within reach is actually fighting the player or a companion. A combat
+        // flag or a drawn weapon alone is not a fight; the party keeps its formation until this.
+        [[nodiscard]] bool EnemiesEngaged(RE::PlayerCharacter& a_player) const;
         [[nodiscard]] bool IsAutomaticCandidate(RE::Actor& a_actor) const;
         [[nodiscard]] bool IsActorUsable(RE::Actor& a_actor, RE::PlayerCharacter& a_player) const;
         [[nodiscard]] bool IsGlobalTravelStateSafe(RE::PlayerCharacter& a_player) const;
@@ -362,6 +365,8 @@ namespace Wayfarer
         static void Notify(std::string_view a_message);
 
         std::unordered_map<RE::FormID, ManagedFollower> managed;
+        mutable std::uint64_t enemiesCheckedAt{};
+        mutable bool enemiesEngaged{};
         Victory::Encounter victoryEncounter;
         std::unordered_map<RE::FormID, RE::ActorHandle> victoryEnemies;
         struct VictoryReaction

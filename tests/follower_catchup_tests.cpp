@@ -172,26 +172,28 @@ int main()
     }
     Check(ActionGrid::Move(0, 0, -1) == -1 && ActionGrid::Move(2, 0, -1) == -1,
           "up from the top row goes back to the wheel");
-    // Four party actions on top; the three roles below, centred between them.
-    Check(ActionGrid::Move(0, 0, 1) == 4 && ActionGrid::Move(1, 0, 1) == 4 && ActionGrid::Move(2, 0, 1) == 5 &&
-              ActionGrid::Move(3, 0, 1) == 6,
-          "down goes to the nearest role, the left one on a tie");
-    Check(ActionGrid::Move(4, 0, -1) == 0 && ActionGrid::Move(5, 0, -1) == 1 && ActionGrid::Move(6, 0, -1) == 2,
-          "up goes to the nearest party action");
-    Check(ActionGrid::Move(0, -1, 0) == 0 && ActionGrid::Move(3, 1, 0) == 3 && ActionGrid::Move(6, 1, 0) == 6 &&
+    // Four party actions on top; the three roles and the battle plan below, column for column.
+    Check(ActionGrid::Move(0, 0, 1) == 4 && ActionGrid::Move(1, 0, 1) == 5 && ActionGrid::Move(2, 0, 1) == 6 &&
+              ActionGrid::Move(3, 0, 1) == 7,
+          "down goes to the tile below");
+    Check(ActionGrid::Move(4, 0, -1) == 0 && ActionGrid::Move(5, 0, -1) == 1 && ActionGrid::Move(6, 0, -1) == 2 &&
+              ActionGrid::Move(7, 0, -1) == 3,
+          "up goes to the party action above");
+    Check(ActionGrid::Move(0, -1, 0) == 0 && ActionGrid::Move(3, 1, 0) == 3 && ActionGrid::Move(7, 1, 0) == 7 &&
               ActionGrid::Move(4, -1, 0) == 4 && ActionGrid::Move(5, 0, 1) == 5,
           "edges stop instead of wrapping");
-    Check(ActionGrid::Move(4, 1, 0) == 5 && ActionGrid::Move(5, -1, 0) == 4 && ActionGrid::Move(1, 1, 0) == 2,
+    Check(ActionGrid::Move(4, 1, 0) == 5 && ActionGrid::Move(5, -1, 0) == 4 && ActionGrid::Move(1, 1, 0) == 2 &&
+              ActionGrid::Move(6, 1, 0) == 7,
           "left and right move along a row");
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 4; ++i) {
         const auto top = ActionGrid::TileBox(i, 1), below = ActionGrid::TileBox(4 + i, 1);
-        Check(std::abs(below.x - (top.x + top.w * .5F + .013F)) < .02F, "the roles row sits centred between");
+        Check(std::abs(below.x - top.x) < .001F && below.y > top.y + top.h, "the second row lines up under the first");
     }
     std::array<float, 3> settled{};
     constexpr std::array<float, 3> rates{30, 60, 144};
     for (int r = 0; r < 3; ++r) {
         ActionGrid::Motion g;
-        const std::array<bool, ActionGrid::count> on{false, true, false, true, false, true, true};
+        const std::array<bool, ActionGrid::count> on{false, true, false, true, false, true, true, false};
         g.Reset(0, false, on);
         for (int i = 0; i < static_cast<int>(rates[r] * .5F); ++i) {
             g.Update(1 / rates[r], true, 4, on);

@@ -3,9 +3,9 @@
 Skyrim follower mod. Travel with up to 10 companions, change their formation,
 and let them rest nearby.
 
-Version **0.2.5** adds custom formations, the Pathfinder, a Party actions page and
-included TETHER clasp animations, takes over NFF's catch-up, and fixes GOG startup and
-settings that failed to save under MO2. See the [changelog since 0.2.2](docs/changes-0.2.5.md).
+Version **0.3.0** keeps the formation while weapons are out with nobody to fight, adds a
+Battle plan tile for the optional Fight With Me mod and finds SKSE Menu
+Framework 3 more reliably. See the [changelog since 0.2.5](docs/changes-0.3.0.md).
 
 For future feature work, start from the [accepted baseline](docs/baseline-0.2.1.md).
 

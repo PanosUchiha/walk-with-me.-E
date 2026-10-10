@@ -100,7 +100,7 @@ issues no order.
 **Party actions** is a second page under the wheel. Reach it through the
 translucent bar at the bottom, D-pad down, the Down arrow, Tab or the mouse wheel.
 Go back with the bar at the top, D-pad up from the top row, Tab, the mouse wheel,
-Escape or B. It is a 3 x 2 grid in the wheel's style with yellow accents:
+Escape or B. It is two rows of four tiles in the wheel's style with yellow accents:
 
 - **Teleport party** closes the menu and brings eligible travelling companions
   to nearby ground, including companions available from active follower slots
@@ -112,10 +112,13 @@ Escape or B. It is a 3 x 2 grid in the wheel's style with yellow accents:
   The explicit **Relax** order stays available.
 - **Companion control** opens the take/release panel for the companion you were
   looking at when you opened the menu (also C, or X on gamepad, from either page).
-- **Hold hands**, **Loot scouting** and **Walk With Me** switch those features on
-  or off and save immediately, like their settings.
+- **Hold hands**, **Loot scouting**, **Pathfinder** and **Walk With Me** switch those
+  features on or off and save immediately, like their settings.
+- **Battle plan** opens Fight With Me's battle plan, where each companion gets a role,
+  a focus and a place in a fight. It needs the separate Fight With Me mod; without it
+  the tile stays dimmed and says so, and nothing else changes.
 
-Choose with the mouse, arrows or D-pad; select with a click, Enter, A or 1-6. A
+Choose with the mouse, arrows or D-pad; select with a click, Enter, A or 1-8. A
 line under the grid explains the focused tile, and an unavailable tile says why.
 Tiles rise in one after another, a yellow frame glides to the focused tile, and
 the switches animate. See [party-actions-grid.md](party-actions-grid.md).

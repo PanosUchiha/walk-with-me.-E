@@ -110,6 +110,7 @@ std::array<GridTile,ActionGrid::count> Tiles(int variant,const std::array<bool,A
  t[ActionGrid::HoldHands]={"Hold hands",variant==1?"Choose a partner":"With Rumarin",variant!=1,true,on[ActionGrid::HoldHands]};
  t[ActionGrid::LootScout]={"Loot scouting","Rumarin",true,true,on[ActionGrid::LootScout]};
  t[ActionGrid::Pathfinder]={"Pathfinder",variant==1?"Not in this style":"Curious first",true,true,on[ActionGrid::Pathfinder]};
+ t[ActionGrid::BattlePlan]={"Battle plan",variant==1?"Needs Fight With Me":"Roles and tactics",variant!=1};
  return t;
 }
 // The scripted review timeline (seconds): open on the wheel, go down to the grid, walk the
@@ -122,7 +123,7 @@ const int customEmblem=Custom::EmblemFromKey(PREVIEW_CUSTOM_EMBLEM);
 void Scene(float time,int variant,bool pressTimeline,bool gamepad){
  auto& io=ImGui::GetIO();
  Wheel::Motion motion;motion.Open(0);ActionGrid::Motion g;
- std::array<bool,ActionGrid::count> on{false,true,false,true,true,true,true};
+ std::array<bool,ActionGrid::count> on{false,true,false,true,true,true,true,false};
  g.Reset(0,false,on);
  bool gridPage=false;int tile=0;float elapsed=0,centerElapsed=0;
  const float dt=1.0F/60;

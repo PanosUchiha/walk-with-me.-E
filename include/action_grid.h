@@ -6,14 +6,14 @@
 
 // The party menu's second page: the actions that used to sit under the wheel (teleport,
 // temporary relaxation, companion control) and quick toggles. The top row holds the party
-// actions, the row beneath the companion roles (hand holding, loot scouting, pathfinder),
-// centred under it. The wheel page ends in a translucent bar pointing down to it; the grid
-// starts with one pointing back up. Pure layout, navigation and motion, shared by the game and
-// the offline preview.
+// actions, the row beneath the companion roles (hand holding, loot scouting, pathfinder) and
+// the battle plan, which belongs to Fight With Me and stays dimmed without it. The wheel page
+// ends in a translucent bar pointing down to it; the grid starts with one pointing back up.
+// Pure layout, navigation and motion, shared by the game and the offline preview.
 namespace Wayfarer::ActionGrid
 {
-    constexpr std::array<int, 2> rowSizes{4, 3};
-    constexpr int rows = static_cast<int>(rowSizes.size()), count = 7, columns = 4;
+    constexpr std::array<int, 2> rowSizes{4, 4};
+    constexpr int rows = static_cast<int>(rowSizes.size()), count = 8, columns = 4;
     enum Tile : int
     {
         Teleport,
@@ -22,7 +22,8 @@ namespace Wayfarer::ActionGrid
         Guidance,
         HoldHands,
         LootScout,
-        Pathfinder
+        Pathfinder,
+        BattlePlan
     };
 
     struct Box
@@ -172,7 +173,7 @@ namespace Wayfarer::ActionGrid
             }
         }
         // Tiles rise in one after another, left to right and top to bottom.
-        float Reveal(int index) const { return Wheel::EaseOut((gridElapsed - .06F - index * .035F) / .26F); }
+        float Reveal(int index) const { return Wheel::EaseOut((gridElapsed - .06F - index * .03F) / .26F); }
         bool OnGrid() const { return page > .5F; }
         // A staggered crossfade: the wheel clears before the grid is fully in, so the two never
         // sit on top of each other at half strength.

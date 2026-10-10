@@ -10,6 +10,7 @@
 #include "order_wheel.h"
 #include "overhead_icons.h"
 #include "rest_dialogue.h"
+#include "fight_with_me.h"
 #include <functional>
 #include <optional>
 
@@ -1818,7 +1819,7 @@ namespace Wayfarer::Menu
             }
             return clicked;
         }
-        // The party actions page: six tiles that rise in one after another, a yellow selection frame
+        // The party actions page: eight tiles that rise in one after another, a yellow selection frame
         // that glides between them, and a line under the grid explaining the focused one. Returns the
         // tile clicked this frame, or -1; `hovered` is the tile under the mouse.
         int ActionGridPage(V origin, float w, const std::array<GridTile, ActionGrid::count>& tiles, int focus,
@@ -1831,7 +1832,8 @@ namespace Wayfarer::Menu
                 "Switch party guidance on or off. Off hands everyone back to their own AI.",
                 "Walk hand in hand with your chosen partner in Companion mode.",
                 "Your finder points out chests, bodies and valuables worth a look.",
-                "Your pathfinder points out places you have never found, in Natural, Lead and Companion."};
+                "Your pathfinder points out places you have never found, in Natural, Lead and Companion.",
+                "Give each companion a role, a focus and a place in battle. Comes with Fight With Me."};
             auto* draw = Im::GetWindowDrawList();
             const float lift = w * .05F * (1 - motion.page);
             const float a0 = std::clamp(visibility, 0.0F, 1.0F);
@@ -1920,6 +1922,9 @@ namespace Wayfarer::Menu
                     break;
                 case ActionGrid::Pathfinder:
                     OrderVisuals::Icon(draw, icon, iconSize, 9, t, a * (.6F + .4F * on), true, tint | 0xFF000000u);
+                    break;
+                case ActionGrid::BattlePlan:
+                    OrderVisuals::Crest(draw, icon, iconSize * 1.05F, Custom::EmblemFromKey("swords"), a, tint | 0xFF000000u);
                     break;
                 default:
                     OrderVisuals::DrawGlyph(draw, icon, iconSize * .92F, OrderVisuals::Glyph::Power, t,
@@ -2057,7 +2062,7 @@ namespace Wayfarer::Menu
             const std::array<bool, ActionGrid::count> on{false,         view.settings.sandbox.automatic,
                                                          false,         view.enabled,
                                                          hands.enabled, loot.enabled,
-                                                         view.settings.pathfinder.enabled};
+                                                         view.settings.pathfinder.enabled, false};
             Im::SetNextWindowPos({display.x * .5F, display.y * .5F}, Im::ImGuiCond_Always, {.5F, .5F});
             Im::SetNextWindowSize({w, w * Wheel::windowHeight}, Im::ImGuiCond_Always);
             bool open = true;
@@ -2243,6 +2248,9 @@ namespace Wayfarer::Menu
                                                  : path.companionName.empty() ? "Curious first"
                                                                               : path.companionName,
                                                  view.inGame && !saving, true, on[ActionGrid::Pathfinder]};
+                const bool battlePlan = FightWithMe::Available();
+                tiles[ActionGrid::BattlePlan] = {"Battle plan", battlePlan ? "Roles and tactics" : "Needs Fight With Me",
+                                                 view.inGame && battlePlan};
 
                 if (toGrid && !motion.closing) {
                     gridPage = true;
@@ -2389,6 +2397,12 @@ namespace Wayfarer::Menu
                         break;
                     case ActionGrid::CompanionControl:
                         OpenPackageControl(view, wheelPackageActor);
+                        break;
+                    case ActionGrid::BattlePlan:
+                        SetWheelOpen(false);
+                        if (!FightWithMe::OpenBattlePlan()) {
+                            logger::warn("[Menu] Fight With Me did not open its battle plan");
+                        }
                         break;
                     default:
                         if (!toggleSaving.exchange(true)) {
@@ -3328,9 +3342,15 @@ namespace Wayfarer::Menu
     void Register()
     {
         Cache(FormationController::GetSingleton().Snapshot());
-        if (!GetModuleHandleW(L"SKSEMenuFramework.dll") || MF::GetMenuFrameworkVersion() < 3.0F) {
-            logger::warn(
-                "[Menu] SKSE Menu Framework 3 not found; INI and keyboard controls remain available");
+        // Ask the loaded DLL directly. The header's GetMenuFrameworkVersion first checks a
+        // path relative to the current directory, which can fail while the DLL is loaded.
+        using VersionFunction = float (*)();
+        const auto version = GetMenuFrameworkFunction<VersionFunction>("GetMenuFrameworkVersion");
+        if (!GetModuleHandleW(L"SKSEMenuFramework.dll") || !version || version() < 3.0F) {
+            logger::warn("[Menu] SKSE Menu Framework 3 not found ({}); INI and keyboard controls remain available",
+                         !GetModuleHandleW(L"SKSEMenuFramework.dll") ? "DLL not loaded"
+                         : !version                                  ? "no version export"
+                                                                     : "older than 3");
             return;
         }
         MF::SetSection("Walk With Me");
@@ -3352,6 +3372,6 @@ namespace Wayfarer::Menu
         installed.store(true);
         logger::info("[Menu] Party, Travel, Rest, Loot, Interface, Controls, command window and HUD "
                      "registered (framework {})",
-                     MF::GetMenuFrameworkVersion());
+                     version());
     }
 } // namespace Wayfarer::Menu

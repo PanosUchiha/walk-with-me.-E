@@ -13,6 +13,10 @@ NFF and custom followers have separate enforcement settings.
 Aim at an NPC and press G for Travel together, Release, Unstick and Cancel.
 The wheel includes party teleport and temporary relaxation controls.
 
+Weapons out with nobody to fight keeps the formation; a real fight hands companions
+back to their own combat AI. [b]Fight With Me[/b] is optional: with it installed, the
+Party actions page gets a Battle plan button. Without it, that tile stays dimmed.
+
 [b]Requirements[/b]
 
 Windows, matching SKSE, Address Library, SKSE Menu Framework 3 and the x64 Visual

@@ -2,10 +2,10 @@
 
 ## Download
 
-For the 0.2.5 release, use the
+For the 0.3.0 release, use the
 [Walk With Me Files page](https://www.nexusmods.com/skyrimspecialedition/mods/191283?tab=files).
-Download **Walk-With-Me-0.2.5-SE-AE.zip** from Main Files, and the matching
-**Walk-With-Me-0.2.5-Command-Gestures.zip** from Optional Files once the release
+Download **Walk-With-Me-0.3.0-SE-AE.zip** from Main Files, and the matching
+**Walk-With-Me-0.3.0-Command-Gestures.zip** from Optional Files once the release
 has been uploaded. The Source ZIP is for developers, not a mod-manager install.
 The add-on requires the main mod. It supplies third-person command signals and a
 GPMA source extension, not the full GPMA mod or the optional hand-holding clips.
@@ -111,7 +111,7 @@ line-based parser. A fresh Nemesis run and in-game playback still need validatio
 ## OAR errors and missing animations
 
 - Unknown `WWM_PostCombatShoulderRecovery` or a **Walk With Me Victory** entry:
-  the 0.2.5 packages contain neither. Replace the old mod and disable old overlays
+  the 0.3.0 packages contain neither. Replace the old mod and disable old overlays
   so their leftover victory configs are removed; do not edit their conditions to
   force them on. Post-victory reactions are shelved.
 - `Walk With Me: Missing` or unknown clasp conditions: check that both Wayfarer.dll

@@ -2,16 +2,15 @@
 
 Run `tools/package-release.py` after building the matching DLL, seven scripts and
 ESP and reviewing the changelog and validation record. It creates these public
-files in the selected output directory (`build-release.ps1` defaults to `release/0.2.5`):
+files in the selected output directory (`build-release.ps1` defaults to `release/0.3.0`):
 
-- `Walk-With-Me-0.2.5-SE-AE.zip` (Main Files)
-- `Walk-With-Me-0.2.5-Command-Gestures.zip` (Optional Files)
-- `Walk-With-Me-0.2.5-Source.zip` (complete source; developer download)
+- `Walk-With-Me-0.3.0-SE-AE.zip` (Main Files)
+- `Walk-With-Me-0.3.0-Command-Gestures.zip` (Optional Files)
+- `Walk-With-Me-0.3.0-Source.zip` (complete source; developer download)
 - A SHA-256 file for each archive
-- `Walk-With-Me-0.2.5-CHANGELOG.md`
+- `Walk-With-Me-0.3.0-CHANGELOG.md`
 
-Use the changelog for the release post. It compares against 0.2.2; there was
-no 0.2.3 or 0.2.4.
+Use the changelog for the release post. It compares against 0.2.5.
 The gesture guide links to the mod's Files tab. That link will offer this add-on
 only after it is uploaded; packaging alone does not make it downloadable there.
 

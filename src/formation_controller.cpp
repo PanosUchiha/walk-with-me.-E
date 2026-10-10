@@ -1305,7 +1305,7 @@ namespace Wayfarer
         if (!actorState) {
             return "no actor state";
         }
-        if (!held && a_actor.IsInCombat()) {
+        if (!held && a_actor.IsInCombat() && EnemiesEngaged(a_player)) {
             return "in combat";
         }
         if (!held && a_actor.IsSneaking()) {
@@ -1344,7 +1344,7 @@ namespace Wayfarer
         if (actorState->GetLifeState() == RE::ACTOR_LIFE_STATE::kRestrained) {
             return "restrained by another behavior";
         }
-        if (!held && !allowDrawnWeapon && actorState->IsWeaponDrawn()) {
+        if (!held && !allowDrawnWeapon && actorState->IsWeaponDrawn() && EnemiesEngaged(a_player)) {
             return "weapon drawn";
         }
         if (!IsRegisteredFollower(a_actor.GetFormID()) && CandidateRejection(a_actor)) {
@@ -1401,13 +1401,13 @@ namespace Wayfarer
         if (!a_player.GetParentCell()) {
             return "player cell unavailable";
         }
-        if (settings.releaseInCombat && a_player.IsInCombat()) {
+        if (settings.releaseInCombat && a_player.IsInCombat() && EnemiesEngaged(a_player)) {
             return "player in combat";
         }
         if (settings.releaseWhenSneaking && a_player.IsSneaking()) {
             return "player sneaking";
         }
-        if (settings.releaseWhenWeaponDrawn && playerState->IsWeaponDrawn()) {
+        if (settings.releaseWhenWeaponDrawn && playerState->IsWeaponDrawn() && EnemiesEngaged(a_player)) {
             return "player weapon drawn";
         }
         if (playerState->IsSwimming()) {
@@ -1435,6 +1435,37 @@ namespace Wayfarer
             }
         }
         return nullptr;
+    }
+
+    bool FormationController::EnemiesEngaged(RE::PlayerCharacter& a_player) const
+    {
+        const auto now = GetTickCount64();
+        if (now - enemiesCheckedAt < 250) {
+            return enemiesEngaged;
+        }
+        enemiesCheckedAt = now;
+        enemiesEngaged = false;
+        auto* lists = RE::ProcessLists::GetSingleton();
+        if (!lists) {
+            return false;
+        }
+        const auto origin = a_player.GetPosition();
+        for (auto& handle : lists->highActorHandles) {
+            auto actor = handle.get();
+            if (!actor || actor.get() == &a_player || actor->IsDead() || actor->IsDisabled() || !actor->IsInCombat() ||
+                actor->IsPlayerTeammate() || managed.contains(actor->GetFormID())) {
+                continue;
+            }
+            if (origin.GetDistance(actor->GetPosition()) > 6000.0F) {
+                continue;
+            }
+            auto target = actor->GetActorRuntimeData().currentCombatTarget.get();
+            if (target && (target.get() == &a_player || target->IsPlayerTeammate() || managed.contains(target->GetFormID()))) {
+                enemiesEngaged = true;
+                break;
+            }
+        }
+        return enemiesEngaged;
     }
 
     bool FormationController::IsGlobalTravelStateSafe(RE::PlayerCharacter& a_player) const
