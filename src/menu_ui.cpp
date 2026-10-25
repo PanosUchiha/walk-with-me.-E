@@ -11,6 +11,7 @@
 #include "overhead_icons.h"
 #include "rest_dialogue.h"
 #include "fight_with_me.h"
+#include "tether_clasp.h"
 #include <functional>
 #include <optional>
 
@@ -1217,7 +1218,7 @@ namespace Wayfarer::Menu
                 Im::TextUnformatted("Hand-holding companion");
                 Im::TableNextColumn();
                 Im::SetNextItemWidth(-1);
-                std::string preview = hands.partner.empty()       ? "None"
+                std::string preview = hands.partner.empty()       ? (hands.enabled ? "None - choose one" : "None")
                                       : hands.partnerName.empty() ? "Selected companion"
                                                                   : hands.partnerName;
                 const bool nearby = std::any_of(view.party.begin(), view.party.end(), [&](const auto& row) {
@@ -1830,7 +1831,7 @@ namespace Wayfarer::Menu
                 "When you stop, the party settles in nearby. Off: they wait on their feet.",
                 "Take or return control of the companion you were looking at.",
                 "Switch party guidance on or off. Off hands everyone back to their own AI.",
-                "Walk hand in hand with your chosen partner in Companion mode.",
+                "Walk hand in hand in Companion style with your partner, or the nearest companion.",
                 "Your finder points out chests, bodies and valuables worth a look.",
                 "Your pathfinder points out places you have never found, in Natural, Lead and Companion.",
                 "Give each companion a role, a focus and a place in battle. Comes with Fight With Me."};
@@ -1994,26 +1995,69 @@ namespace Wayfarer::Menu
                 Engine::Notify("Walk With Me could not save the enable setting");
             }
         }
+        // The companion under the crosshair, otherwise the nearest one, party members first. In
+        // Vanilla nobody is in the party yet; they join once Companion directs them. Only placed
+        // actors have a reference the setting can keep.
+        const CompanionView* HandPartnerFor(const PartyView& view)
+        {
+            const CompanionView* pick = nullptr;
+            for (const auto& row : view.party) {
+                const bool follows = row.managed || row.eligible || row.teammate || row.manuallyAdded ||
+                                     row.apiRegistered || row.packageControlled;
+                if (!follows || row.excluded || row.handHoldKey.empty()) {
+                    continue;
+                }
+                if (row.id == view.crosshairActor) {
+                    return &row;
+                }
+                if (!pick || (row.managed != pick->managed ? row.managed : row.distance < pick->distance)) {
+                    pick = &row;
+                }
+            }
+            return pick;
+        }
         void ToggleHandHolding(FormationController& c)
         {
-            auto value = c.Snapshot().settings;
+            const auto view = c.Snapshot();
+            auto value = view.settings;
             auto& hands = value.handHolding;
-            if (!hands.enabled && hands.partner.empty()) {
-                Engine::Notify("Choose a hand-holding companion in Travel settings first");
-                return;
-            }
-            hands.enabled = !hands.enabled;
-            if (!c.ApplyPreferences(value)) {
-                Engine::Notify("Walk With Me could not save the hand-holding setting");
-            }
-            else if (!hands.enabled) {
-                Engine::Notify("Hand holding off");
+            if (hands.partner.empty()) {
+                const auto* partner = HandPartnerFor(view);
+                if (!partner) {
+                    Engine::Notify("No companion nearby to hold hands with");
+                    return;
+                }
+                hands.partner = partner->handHoldKey;
+                hands.partnerName = partner->name;
+                hands.enabled = true;
             }
             else {
-                Engine::Notify(c.Snapshot().mode == FormationMode::kCompanion
-                                   ? "Hand holding on"
-                                   : "Hand holding on; it starts in Companion mode");
+                hands.enabled = !hands.enabled;
             }
+            // TETHER cannot connect without its OAR clasp poses; Classic needs nothing extra.
+            const bool fallback = hands.enabled && hands.method == HandHolding::Method::Tether &&
+                                  !HandHolding::Clasp::Available();
+            if (fallback) {
+                hands.method = HandHolding::Method::Classic;
+            }
+            if (!c.ApplyPreferences(value)) {
+                Engine::Notify("Walk With Me could not save the hand-holding setting");
+                return;
+            }
+            if (!hands.enabled) {
+                Engine::Notify("Hand holding off");
+                return;
+            }
+            // Hand holding only runs in the Companion style.
+            const bool switched = view.mode != FormationMode::kCompanion;
+            if (switched) {
+                c.SetMode(FormationMode::kCompanion, false);
+                ++orderNotice;
+            }
+            const auto partner = hands.partnerName.empty() ? std::string("your partner") : hands.partnerName;
+            Engine::Notify(fmt::format("Holding hands with {}{}{}", partner, switched ? " in Companion style" : "",
+                                       fallback ? " (Classic: TETHER needs Open Animation Replacer)" : "")
+                               .c_str());
         }
         void ToggleLootScouting(FormationController& c)
         {
@@ -2232,10 +2276,10 @@ namespace Wayfarer::Menu
                 const std::string partner = hands.partnerName.empty() ? "your partner" : hands.partnerName;
                 tiles[ActionGrid::HoldHands] = {
                     "Hold hands",
-                    hands.partner.empty()                    ? "Choose a partner"
+                    hands.partner.empty()                    ? "Nearest companion"
                     : view.mode == FormationMode::kCompanion ? "With " + partner
                                                              : "In Companion",
-                    view.inGame && !saving && (!hands.partner.empty() || hands.enabled), true, on[ActionGrid::HoldHands]};
+                    view.inGame && !saving, true, on[ActionGrid::HoldHands]};
                 tiles[ActionGrid::LootScout] = {"Loot scouting",
                                                 loot.finderName.empty() ? "Any companion" : loot.finderName,
                                                 view.inGame && !saving, true, on[ActionGrid::LootScout]};

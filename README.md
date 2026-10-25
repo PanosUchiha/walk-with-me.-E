@@ -3,9 +3,10 @@
 Skyrim follower mod. Travel with up to 10 companions, change their formation,
 and let them rest nearby.
 
-Version **0.3.0** keeps the formation while weapons are out with nobody to fight, adds a
-Battle plan tile for the optional Fight With Me mod and finds SKSE Menu
-Framework 3 more reliably. See the [changelog since 0.2.5](docs/changes-0.3.0.md).
+Version **0.3.1** fixes companions who would not fight and the frame rate drop after
+fights, makes Hold hands work without a trip to the settings and clears the xEdit
+errors in Wayfarer.esp. See the [changelog since 0.3.0](docs/changes-0.3.1.md) and,
+for 0.3.0 itself, the [changelog since 0.2.5](docs/changes-0.3.0.md).
 
 For future feature work, start from the [accepted baseline](docs/baseline-0.2.1.md).
 

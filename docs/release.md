@@ -1,8 +1,8 @@
-# Walk With Me 0.3.0
+# Walk With Me 0.3.1
 
-The formation holds while weapons are out with nobody to fight, a Battle plan tile
-for the optional Fight With Me mod, and a fix for SKSE Menu Framework 3 not being
-found. See CHANGELOG.md for all changes since 0.2.5.
+Companions fight again instead of being held in formation, no frame rate drop after
+fights, Hold hands that works without visiting the settings, and a clean xEdit check
+of Wayfarer.esp. See CHANGELOG.md for all changes since 0.3.0.
 
 ## Requirements
 
@@ -32,9 +32,9 @@ included in the main download, not the gesture add-on. See HAND_HOLDING.md.
 
 ## Install
 
-Close Skyrim and install `Walk-With-Me-0.3.0-SE-AE.zip` through your mod manager.
+Close Skyrim and install `Walk-With-Me-0.3.1-SE-AE.zip` through your mod manager.
 Replace the old mod, keep your INI if wanted, and enable `Wayfarer.esp`.
-Upgrading from 0.2.5 needs no new game and no behavior regeneration.
+Upgrading from 0.3.0 or 0.2.5 needs no new game and no behavior regeneration.
 Do not rename Wayfarer files or enable two copies.
 
 Read USAGE.md for controls, HAND_HOLDING.md for the experimental feature and
@@ -47,5 +47,5 @@ The DLL links CommonLibSSE-NG 7.5.1 at
 The code uses GPL-3.0-or-later with the included exceptions. Asset licenses are
 separate. See LICENSE, LICENSING.md and ThirdParty.
 
-The matching `Walk-With-Me-0.3.0-Source.zip` includes mod,
+The matching `Walk-With-Me-0.3.1-Source.zip` includes mod,
 CommonLib and dependency source. Build instructions are in docs/build.md.

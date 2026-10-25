@@ -18,6 +18,7 @@ namespace Wayfarer
         std::string personalityKey, personality;
         std::string handHoldKey;
         int personalityOverride{-1};
+        float distance{};
         bool managed{}, excluded{}, nff{}, manuallyAdded{}, apiRegistered{}, eligible{}, packageControlled{};
         bool teammate{}; // Following the player, whether or not a roster Walk With Me reads says so.
     };

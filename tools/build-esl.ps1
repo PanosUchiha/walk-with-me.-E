@@ -65,7 +65,7 @@ function MakePackage([int]$slot) {
     AddSub $d 'EDID' (ZStr "WayfarerFollowPackage$slot")
     
     
-    AddSub $d 'PKDT' ([byte[]](0x00,0x20,0x00,0x00, 0x12,0xFF,0x00,0xFF, 0x80,0x00,0x00,0x00))
+    AddSub $d 'PKDT' ([byte[]](0x00,0x20,0x00,0x00, 0x12,0x00,0x00,0xFF, 0x80,0x00,0x00,0x00))
     AddSub $d 'PSDT' ([byte[]](0xFF,0xFF,0x00,0xFF, 0xFF,0x00,0x00,0x00, 0x00,0x00,0x00,0x00))
 
     AddSub $d 'QNAM' ([BitConverter]::GetBytes([uint32]$QUST_FORMID))
@@ -104,7 +104,7 @@ function MakeGatherPackage([int]$slot) {
     AddSub $d 'EDID' (ZStr "WayfarerGatherPackage$slot")
     
     
-    AddSub $d 'PKDT' ([byte[]](0x00,0x20,0x00,0x00, 0x12,0xFF,0x00,0xFF, 0x80,0x00,0x00,0x00))
+    AddSub $d 'PKDT' ([byte[]](0x00,0x20,0x00,0x00, 0x12,0x00,0x00,0xFF, 0x80,0x00,0x00,0x00))
     AddSub $d 'PSDT' ([byte[]](0xFF,0xFF,0x00,0xFF, 0xFF,0x00,0x00,0x00, 0x00,0x00,0x00,0x00))
 
     $condition=NewBuf;AddU32 $condition 0;AddBytes $condition ([BitConverter]::GetBytes([float]2));AddU32 $condition 74
@@ -146,7 +146,7 @@ function MakeSandboxPackage([int]$slot, [bool]$social = $false, [bool]$pose = $f
     $d=NewBuf
     $name = if($pose) { "WayfarerPosePackage$slot" } elseif($social) { "WayfarerSocialPackage$slot" } else { "WayfarerSandboxPackage$slot" }
     AddSub $d 'EDID' (ZStr $name)
-    AddSub $d 'PKDT' ([byte[]](0x00,0x20,0x00,0x00,0x12,0xFF,0x00,0xFF,0,0,0,0))
+    AddSub $d 'PKDT' ([byte[]](0x00,0x20,0x00,0x00,0x12,0x00,0x00,0xFF,0,0,0,0))
     AddSub $d 'PSDT' ([byte[]](0xFF,0xFF,0,0xFF,0xFF,0,0,0,0,0,0,0))
     
     $condition=NewBuf
@@ -181,7 +181,7 @@ function MakeSandboxPackage([int]$slot, [bool]$social = $false, [bool]$pose = $f
 }
 function MakeSeatPackage([int]$slot) {
     $d=NewBuf;AddSub $d 'EDID' (ZStr "WayfarerSeatPackage$slot")
-    AddSub $d 'PKDT' ([byte[]](0x00,0x20,0,0,0x12,0xFF,0,0xFF,0,0,0,0))
+    AddSub $d 'PKDT' ([byte[]](0x00,0x20,0,0,0x12,0x00,0,0xFF,0,0,0,0))
     AddSub $d 'PSDT' ([byte[]](0xFF,0xFF,0,0xFF,0xFF,0,0,0,0,0,0,0))
     $condition=NewBuf;AddU32 $condition 0;AddBytes $condition ([BitConverter]::GetBytes([float]2));AddU32 $condition 74
     AddU32 $condition (0x01000860+$slot);AddU32 $condition 0;AddU32 $condition 0;AddU32 $condition 0;AddU32 $condition ([uint32]::MaxValue)

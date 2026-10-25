@@ -113,10 +113,14 @@ Escape or B. It is two rows of four tiles in the wheel's style with yellow accen
 - **Companion control** opens the take/release panel for the companion you were
   looking at when you opened the menu (also C, or X on gamepad, from either page).
 - **Hold hands**, **Loot scouting**, **Pathfinder** and **Walk With Me** switch those
-  features on or off and save immediately, like their settings.
+  features on or off and save immediately, like their settings. With no hand-holding
+  partner chosen, **Hold hands** picks the companion you are looking at, or the
+  nearest one, and switches to Companion.
 - **Battle plan** opens Fight With Me's battle plan, where each companion gets a role,
   a focus and a place in a fight. It needs the separate Fight With Me mod; without it
-  the tile stays dimmed and says so, and nothing else changes.
+  the tile stays dimmed and says so, and nothing else changes. While Fight With Me
+  has companions fighting, Walk With Me lets go of the whole party and takes it back
+  once the fight is over.
 
 Choose with the mouse, arrows or D-pad; select with a click, Enter, A or 1-8. A
 line under the grid explains the focused tile, and an unavailable tile says why.
@@ -178,7 +182,8 @@ Enable **Controls > Wheel & signals > Command hand signal**. See
 Gestures skip busy states. Vanilla has no signal. Gesture Animation Remix is not needed.
 
 Hand holding is experimental and off by default. Select one follower and use
-Companion mode in third person. Choose **Classic** in Travel's
+Companion mode in third person, or let the **Hold hands** tile or hotkey pick the
+nearest companion and switch to Companion for you. Choose **Classic** in Travel's
 **Hand-holding method** selector for the earlier procedural hand holding without
 clasp clips, or keep **TETHER** for the physics grip. Switching releases
 the current grip before reconnecting. Classic also offers **Hand spacing** and

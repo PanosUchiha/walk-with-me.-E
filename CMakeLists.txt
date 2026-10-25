@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Wayfarer VERSION 0.3.0 LANGUAGES CXX)
+project(Wayfarer VERSION 0.3.1 LANGUAGES CXX)
 if(PROJECT_VERSION_PATCH STREQUAL "")
     set(PROJECT_VERSION_PATCH 0)
 endif()

@@ -3,6 +3,7 @@
 #include "command_gesture.h"
 #include "custom_followers.h"
 #include "engine_compatibility.h"
+#include "fight_with_me.h"
 #include "follower_eligibility.h"
 #include "gesture_head_tracking.h"
 #include "hand_hold_locomotion.h"
@@ -40,6 +41,26 @@ namespace
     constexpr RE::FormID NFF_LOOT_PACKAGES[]{0x415AD9, 0x41F941}; // nwsFollowerLoot{Ext,Int}PKG.
 
     constexpr RE::FormID WAYFARER_QUEST_LOCAL_ID = 0x805;
+
+    // Walk With Me's own globals, looked up once. A lookup by plugin name walks every loaded file,
+    // and these flags are written on every frame while the party is released.
+    RE::TESGlobal* OwnGlobal(RE::FormID a_local)
+    {
+        static std::mutex lock;
+        static std::unordered_map<RE::FormID, RE::TESGlobal*> cache;
+        std::lock_guard guard(lock);
+        if (const auto found = cache.find(a_local); found != cache.end()) {
+            return found->second;
+        }
+        auto* data = RE::TESDataHandler::GetSingleton();
+        auto* global =
+            data ? data->LookupForm<RE::TESGlobal>(a_local, Wayfarer::Settings::GetSingleton().Get().pluginName)
+                 : nullptr;
+        if (global) {
+            cache.emplace(a_local, global);
+        }
+        return global;
+    }
 
     // A script's own variable (not a property), searched from the most derived class up; the
     // object's variable array holds the base classes' variables first.
@@ -852,6 +873,8 @@ namespace Wayfarer
         ResetVictoryCelebration(false);
         aliasSyncBusy = true;
         ReleaseAll();
+        enemiesCheckedAt = enemiesSeenAt = 0;
+        enemiesEngaged = false;
         dialogueGuard = {};
         regroup.Reset();
         sandbox.Reset();
@@ -1305,7 +1328,9 @@ namespace Wayfarer
         if (!actorState) {
             return "no actor state";
         }
-        if (!held && a_actor.IsInCombat() && EnemiesEngaged(a_player)) {
+        // A companion in combat runs the combat AI, not packages. Driving them anyway re-evaluates
+        // their package every second, which drops them out of the fight they were about to start.
+        if (!held && a_actor.IsInCombat()) {
             return "in combat";
         }
         if (!held && a_actor.IsSneaking()) {
@@ -1404,6 +1429,11 @@ namespace Wayfarer
         if (settings.releaseInCombat && a_player.IsInCombat() && EnemiesEngaged(a_player)) {
             return "player in combat";
         }
+        // Fight With Me runs the party's fights: once it has companions fighting, or has called
+        // them into a fight, they are its until the fight is over.
+        if (settings.releaseInCombat && FightWithMe::InBattle()) {
+            return "Fight With Me has the party fighting";
+        }
         if (settings.releaseWhenSneaking && a_player.IsSneaking()) {
             return "player sneaking";
         }
@@ -1444,27 +1474,35 @@ namespace Wayfarer
             return enemiesEngaged;
         }
         enemiesCheckedAt = now;
-        enemiesEngaged = false;
         auto* lists = RE::ProcessLists::GetSingleton();
         if (!lists) {
-            return false;
+            return enemiesEngaged = false;
         }
+        const auto ours = [&](RE::Actor& actor) {
+            if (&actor == &a_player || actor.IsPlayerTeammate() || managed.contains(actor.GetFormID())) {
+                return true;
+            }
+            const auto commander = actor.IsCommandedActor() ? actor.GetCommandingActor() : nullptr;
+            return commander && (commander.get() == &a_player || commander->IsPlayerTeammate());
+        };
         const auto origin = a_player.GetPosition();
         for (auto& handle : lists->highActorHandles) {
             auto actor = handle.get();
-            if (!actor || actor.get() == &a_player || actor->IsDead() || actor->IsDisabled() || !actor->IsInCombat() ||
-                actor->IsPlayerTeammate() || managed.contains(actor->GetFormID())) {
+            if (!actor || actor->IsDead() || actor->IsDisabled() || !actor->IsInCombat() || ours(*actor)) {
                 continue;
             }
             if (origin.GetDistance(actor->GetPosition()) > 6000.0F) {
                 continue;
             }
             auto target = actor->GetActorRuntimeData().currentCombatTarget.get();
-            if (target && (target.get() == &a_player || target->IsPlayerTeammate() || managed.contains(target->GetFormID()))) {
-                enemiesEngaged = true;
+            if (target && ours(*target)) {
+                enemiesSeenAt = now;
                 break;
             }
         }
+        // A fight stays a fight for a few seconds after the last enemy turns away. Target switches
+        // and short lulls would otherwise regroup the party and release it again moments later.
+        enemiesEngaged = enemiesSeenAt && now - enemiesSeenAt < 3000;
         return enemiesEngaged;
     }
 
@@ -2971,22 +3009,14 @@ namespace Wayfarer
 
     void FormationController::SetSandboxFlag(bool active)
     {
-        auto* data = RE::TESDataHandler::GetSingleton();
-        auto* flag =
-            data ? data->LookupForm<RE::TESGlobal>(SANDBOX_GLOBAL, Settings::GetSingleton().Get().pluginName)
-                 : nullptr;
-        if (flag) {
+        if (auto* flag = OwnGlobal(SANDBOX_GLOBAL)) {
             flag->value = active ? 1.0F : 0.0F;
         }
     }
 
     void FormationController::SetPoseFlag(int slot, int kind)
     {
-        auto* data = RE::TESDataHandler::GetSingleton();
-        auto* flag = data ? data->LookupForm<RE::TESGlobal>(PoseGlobalLocal(slot),
-                                                            Settings::GetSingleton().Get().pluginName)
-                          : nullptr;
-        if (flag) {
+        if (auto* flag = OwnGlobal(PoseGlobalLocal(slot))) {
             flag->value = static_cast<float>(kind);
         }
     }
@@ -3287,11 +3317,7 @@ namespace Wayfarer
 
     void FormationController::SetSocialFlag(int slot, int phase)
     {
-        auto* data = RE::TESDataHandler::GetSingleton();
-        auto* flag = data ? data->LookupForm<RE::TESGlobal>(SocialGlobalLocal(slot),
-                                                            Settings::GetSingleton().Get().pluginName)
-                          : nullptr;
-        if (flag) {
+        if (auto* flag = OwnGlobal(SocialGlobalLocal(slot))) {
             flag->value = static_cast<float>(phase);
         }
     }
@@ -6692,6 +6718,7 @@ namespace Wayfarer
                 row.id = id;
                 row.name = actor.GetName();
                 row.nff = nff;
+                row.distance = Distance2D(actor.GetPosition(), player->GetPosition());
                 row.handHoldKey = HandHolding::ReferenceKey(actor);
                 row.personalityKey = PersonalityKey(actor);
                 row.personality = PersonalityName(PersonalityFor(actor));

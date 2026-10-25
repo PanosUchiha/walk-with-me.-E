@@ -366,6 +366,7 @@ namespace Wayfarer
 
         std::unordered_map<RE::FormID, ManagedFollower> managed;
         mutable std::uint64_t enemiesCheckedAt{};
+        mutable std::uint64_t enemiesSeenAt{};
         mutable bool enemiesEngaged{};
         Victory::Encounter victoryEncounter;
         std::unordered_map<RE::FormID, RE::ActorHandle> victoryEnemies;

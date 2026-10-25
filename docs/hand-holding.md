@@ -1,8 +1,12 @@
 # Hand holding
 
-Experimental and off by default. Use Companion mode, third person and sheathed
-weapons. Choose a follower in Travel settings, enable Hand holding, then pause
-to let them approach and connect. Walking, jogging and running are supported.
+Experimental and off by default. Use third person and sheathed weapons. The quickest
+way to start is the **Hold hands** tile on the Party actions page, or its hotkey: with
+no partner chosen yet, it takes the companion you are looking at, or else the nearest
+one in your party, and switches the formation to Companion, the only style hand
+holding runs in. You can also choose a follower in Travel settings and enable Hand
+holding there. Pause to let them approach and connect. Walking, jogging and running
+are supported.
 
 ## Choose a method
 
@@ -14,7 +18,9 @@ In Travel settings, choose **Hand-holding method**:
   uses (see [Classic native r5](classic-native-r5.md)).
 - **TETHER** keeps the physics grip and the included OAR clasp poses.
 
-Classic is the default. An explicitly saved TETHER selection is preserved.
+Classic is the default. An explicitly saved TETHER selection is preserved, except
+that turning hand holding on with TETHER selected and Open Animation Replacer
+missing switches the method to Classic and says so.
 
 Both methods use the same enable toggle, selected companion, lead-in delay and
 connection/release distances. Changing methods releases the current grip;
