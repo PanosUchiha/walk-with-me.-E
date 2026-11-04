@@ -546,17 +546,9 @@ namespace Wayfarer::Loot
         if (!actor) {
             return;
         }
-        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-        if (!vm) {
-            return;
-        }
-        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
-        auto args = RE::MakeFunctionArguments(
-            RE::BSFixedString(eventName),
-            RE::BSFixedString(""),
-            0.0f,
-            actor);
-        vm->DispatchStaticCall("ModEvent", "Send", args, callback);
+
+        SKSE::ModCallbackEvent modEvent(eventName, "", 0.0f, actor);
+        SKSE::GetModCallbackEventSource()->SendEvent(&modEvent);
     }
 
     void Update(float dt)
