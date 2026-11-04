@@ -541,6 +541,24 @@ namespace Wayfarer::Loot
         Publish();
     }
 
+    void NotifyScout(RE::Actor* actor, const char* eventName)
+    {
+        if (!actor) {
+            return;
+        }
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        if (!vm) {
+            return;
+        }
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+        auto args = RE::MakeFunctionArguments(
+            RE::BSFixedString(eventName),
+            RE::BSFixedString(""),
+            0.0f,
+            actor);
+        vm->DispatchStaticCall("ModEvent", "Send", args, callback);
+    }
+
     void Update(float dt)
     {
         // A follower must never walk off frozen in a kneel: clear any pose the stand-up did not end.
@@ -556,6 +574,7 @@ namespace Wayfarer::Loot
             }
             return true;
         });
+
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* ui = RE::UI::GetSingleton();
         const auto& settings = Settings::GetSingleton().Get();
@@ -566,8 +585,7 @@ namespace Wayfarer::Loot
             Reset();
             return;
         }
-        // The pathfinder's emblem rides the same projection as the loot chest; the two roles never
-        // fall to the same companion at once.
+
         auto& controller = FormationController::GetSingleton();
         std::vector<FormationController::LootScoutView> scouts;
         if (lootIcons) {
@@ -582,15 +600,22 @@ namespace Wayfarer::Loot
             Reset();
             return;
         }
+
+        // Track who we've already notified this scouting session
+        static std::unordered_set<RE::FormID> notifiedLoot;
+        static std::unordered_set<RE::FormID> notifiedPath;
+
         std::erase_if(sights, [&](const auto& entry) {
             return std::none_of(scouts.begin(), scouts.end(), [&](const auto& scout) {
                 auto actor = scout.actor.get();
                 return actor && actor->GetFormID() == entry.first;
             });
         });
+
         auto* cameraOwner = RE::PlayerCamera::GetSingleton();
         auto* camera = Camera(cameraOwner ? cameraOwner->cameraRoot.get() : nullptr);
         std::vector<Marker> frame;
+
         for (std::size_t index = 0; index < scouts.size(); ++index) {
             const auto& scout = scouts[index];
             auto actor = scout.actor.get();
@@ -598,6 +623,21 @@ namespace Wayfarer::Loot
                 !InSameTravelSpace(*actor, *player)) {
                 continue;
             }
+
+            // Fire once per actor when they become an active scout
+            auto formId = actor->GetFormID();
+            if (index < lootCount) {
+                if (notifiedLoot.find(formId) == notifiedLoot.end()) {
+                    NotifyScout(actor.get(), "WWM_LootScoutStart");
+                    notifiedLoot.insert(formId);
+                }
+            } else {
+                if (notifiedPath.find(formId) == notifiedPath.end()) {
+                    NotifyScout(actor.get(), "WWM_PathfinderStart");
+                    notifiedPath.insert(formId);
+                }
+            }
+
             auto& sight = sights[actor->GetFormID()];
             sight.delay -= dt;
             if (sight.delay <= 0) {
@@ -608,6 +648,7 @@ namespace Wayfarer::Loot
             if (!sight.visible) {
                 continue;
             }
+
             auto point = actor->GetLookingAtLocation();
             if (auto* model = actor->Get3D()) {
                 if (auto* head = model->GetObjectByName("NPC Head [Head]")) {
@@ -617,13 +658,20 @@ namespace Wayfarer::Loot
             point.z += 24.0F;
             float x{}, y{}, z{};
             if (RE::NiCamera::WorldPtToScreenPt3(camera->GetRuntimeData().worldToCam,
-                                                 camera->GetRuntimeData2().port, point, x, y, z, 1e-5F) &&
+                                                camera->GetRuntimeData2().port, point, x, y, z, 1e-5F) &&
                 std::isfinite(x) && std::isfinite(y) && std::isfinite(z) && z > 0 && x > .02F && x < .98F &&
                 y > .03F && y < .97F) {
                 frame.push_back({x, 1.0F - y, scout.valuable, IconAlpha(scout.elapsed), actor->GetFormID(),
-                                 index >= lootCount});
+                                index >= lootCount});
             }
         }
+
+        // Clear notifications when scouting ends
+        if (scouts.empty()) {
+            notifiedLoot.clear();
+            notifiedPath.clear();
+        }
+
         Publish(std::move(frame));
     }
 
