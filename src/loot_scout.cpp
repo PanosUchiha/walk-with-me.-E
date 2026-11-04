@@ -467,6 +467,16 @@ namespace Wayfarer::Loot
         return target;
     }
 
+    void NotifyScout(RE::Actor* actor, const char* eventName)
+    {
+        if (!actor) {
+            return;
+        }
+
+        SKSE::ModCallbackEvent modEvent(eventName, "", 0.0f, actor);
+        SKSE::GetModCallbackEventSource()->SendEvent(&modEvent);
+    }
+
     bool Face(RE::Actor& actor, RE::NiPoint3 point, float dt)
     {
         constexpr float tolerance = .2F; // About 11 degrees.
@@ -496,6 +506,7 @@ namespace Wayfarer::Loot
                                                                  : IDLE_SEARCH_BODY;
         if (PlayIdle(actor, RE::TESForm::LookupByID<RE::TESIdleForm>(loop))) {
             logger::info("[Loot] {} searches {:08X} with idle {:08X}", actor.GetName(), target.id, loop);
+            NotifyScout(&actor, "WWM_LootScoutSearch");
             return true;
         }
         // The idle records carry no conditions, but send the graph event directly if the AI refuses.
@@ -504,6 +515,7 @@ namespace Wayfarer::Loot
                                                            : "IdleSearchingTable";
         if (actor.NotifyAnimationGraph(event)) {
             logger::info("[Loot] {} searches {:08X} with graph event {}", actor.GetName(), target.id, event);
+            NotifyScout(&actor, "WWM_LootScoutSearch");
             return true;
         }
         const bool reached = PlayIdle(actor, RE::TESForm::LookupByID<RE::TESIdleForm>(IDLE_PICKUP_GROUND));
@@ -539,16 +551,6 @@ namespace Wayfarer::Loot
     {
         sights.clear();
         Publish();
-    }
-
-    void NotifyScout(RE::Actor* actor, const char* eventName)
-    {
-        if (!actor) {
-            return;
-        }
-
-        SKSE::ModCallbackEvent modEvent(eventName, "", 0.0f, actor);
-        SKSE::GetModCallbackEventSource()->SendEvent(&modEvent);
     }
 
     void Update(float dt)
@@ -588,14 +590,17 @@ namespace Wayfarer::Loot
             const auto guides = controller.Pathfinders();
             scouts.insert(scouts.end(), guides.begin(), guides.end());
         }
-        if (scouts.empty()) {
-            Reset();
-            return;
-        }
 
         // Track who we've already notified this scouting session
         static std::unordered_set<RE::FormID> notifiedLoot;
         static std::unordered_set<RE::FormID> notifiedPath;
+
+        if (scouts.empty()) {
+            notifiedLoot.clear();
+            notifiedPath.clear();
+            Reset();
+            return;
+        }
 
         std::erase_if(sights, [&](const auto& entry) {
             return std::none_of(scouts.begin(), scouts.end(), [&](const auto& scout) {
@@ -616,19 +621,7 @@ namespace Wayfarer::Loot
                 continue;
             }
 
-            // Fire once per actor when they become an active scout
-            auto formId = actor->GetFormID();
-            if (index < lootCount) {
-                if (notifiedLoot.find(formId) == notifiedLoot.end()) {
-                    NotifyScout(actor.get(), "WWM_LootScoutStart");
-                    notifiedLoot.insert(formId);
-                }
-            } else {
-                if (notifiedPath.find(formId) == notifiedPath.end()) {
-                    NotifyScout(actor.get(), "WWM_PathfinderStart");
-                    notifiedPath.insert(formId);
-                }
-            }
+
 
             auto& sight = sights[actor->GetFormID()];
             sight.delay -= dt;
@@ -651,17 +644,30 @@ namespace Wayfarer::Loot
             float x{}, y{}, z{};
             if (RE::NiCamera::WorldPtToScreenPt3(camera->GetRuntimeData().worldToCam,
                                                 camera->GetRuntimeData2().port, point, x, y, z, 1e-5F) &&
-                std::isfinite(x) && std::isfinite(y) && std::isfinite(z) && z > 0 && x > .02F && x < .98F &&
+                std::isfinite(x) && std::isfinite(y) && std::isfinite(z) &&
+                z > 0 && x > .02F && x < .98F &&
                 y > .03F && y < .97F) {
-                frame.push_back({x, 1.0F - y, scout.valuable, IconAlpha(scout.elapsed), actor->GetFormID(),
+
+                const auto formId = actor->GetFormID();
+
+                if (index < lootCount) {
+
+                    if (notifiedLoot.insert(formId).second) {
+                        NotifyScout(actor.get(), "WWM_LootScoutStart");
+                    }
+
+                } else {
+
+                    if (notifiedPath.insert(formId).second) {
+                        NotifyScout(actor.get(), "WWM_PathfinderStart");
+                    }
+
+                }
+
+                frame.push_back({x, 1.0F - y, scout.valuable,
+                                IconAlpha(scout.elapsed), formId,
                                 index >= lootCount});
             }
-        }
-
-        // Clear notifications when scouting ends
-        if (scouts.empty()) {
-            notifiedLoot.clear();
-            notifiedPath.clear();
         }
 
         Publish(std::move(frame));
